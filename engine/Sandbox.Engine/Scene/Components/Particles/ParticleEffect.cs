@@ -815,6 +815,7 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 	/// <returns>A particle, will never be null. It's up to you to obey max particles.</returns>
 	public Particle Emit( Vector3 position, float delta )
 	{
+		var localSpace = LocalSpace.Evaluate( 0, 254 ).Clamp( 0, 1 );
 		var delay = StartDelay.Evaluate( delta, Random.Shared.Float() );
 
 		var p = Particle.Create();
@@ -823,7 +824,10 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 		p.StartPosition = position;
 		p.Radius = 1.0f;
 		p.Velocity = Vector3.Random.Normal * StartVelocity.Evaluate( delta, Random.Shared.Float() );
-		p.Velocity += InitialVelocity.Evaluate( delta, Random.Shared.Float(), Random.Shared.Float(), Random.Shared.Float() );
+		
+		var initialVelocity = InitialVelocity.Evaluate( delta, Random.Shared.Float(), Random.Shared.Float(), Random.Shared.Float() );
+		p.Velocity += initialVelocity.LerpTo( WorldTransform.NormalToWorld( initialVelocity.Normal ) * initialVelocity.Length, localSpace );
+		
 		p.BornTime += delay;
 		p.DeathTime = p.BornTime + Lifetime.Evaluate( delta, p.Rand( 145, 100 ) );
 
