@@ -515,7 +515,11 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 			var localPos = lastTransform.PointToLocal( p.Position );
 			var worldPos = _worldTx.PointToWorld( localPos );
 
+			var localVelocity = lastTransform.NormalToLocal( p.Velocity.Normal );
+			var worldVelocity = _worldTx.NormalToWorld( localVelocity ) * p.Velocity.Length;
+			
 			p.Position = p.Position.LerpTo( worldPos, localSpace );
+			p.Velocity = p.Velocity.LerpTo( worldVelocity, localSpace );
 		}
 
 		p.ApplyDamping( damping * timeScale );
