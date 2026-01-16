@@ -517,7 +517,7 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 
 			var localVelocity = lastTransform.NormalToLocal( p.Velocity.Normal );
 			var worldVelocity = _worldTx.NormalToWorld( localVelocity ) * p.Velocity.Length;
-			
+
 			p.Position = p.Position.LerpTo( worldPos, localSpace );
 			p.Velocity = p.Velocity.LerpTo( worldVelocity, localSpace );
 		}
@@ -554,7 +554,7 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 		if ( !ConstantMovement.IsNearlyZero() )
 		{
 			var constantMovement = ConstantMovement.Evaluate( p, 4395 ) * _timeDelta;
-			p.Position += constantMovement.LerpTo(_worldTx.NormalToWorld( constantMovement ) * constantMovement.Length, localSpace);
+			p.Position += constantMovement.LerpTo( _worldTx.NormalToWorld( constantMovement ) * constantMovement.Length, localSpace );
 		}
 
 		if ( Collision )
@@ -825,10 +825,10 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 		p.StartPosition = position;
 		p.Radius = 1.0f;
 		p.Velocity = Vector3.Random.Normal * StartVelocity.Evaluate( delta, Random.Shared.Float() );
-		
+
 		var initialVelocity = InitialVelocity.Evaluate( delta, Random.Shared.Float(), Random.Shared.Float(), Random.Shared.Float() );
 		p.Velocity += initialVelocity.LerpTo( WorldTransform.NormalToWorld( initialVelocity ) * initialVelocity.Length, localSpace );
-		
+
 		p.BornTime += delay;
 		p.DeathTime = p.BornTime + Lifetime.Evaluate( delta, p.Rand( 145, 100 ) );
 
