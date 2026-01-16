@@ -554,7 +554,7 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 		if ( !ConstantMovement.IsNearlyZero() )
 		{
 			var constantMovement = ConstantMovement.Evaluate( p, 4395 ) * _timeDelta;
-			p.Position += constantMovement.LerpTo(_worldTx.NormalToWorld( constantMovement ) * constantMovement.Length, localSpace);
+			p.Position += constantMovement.LerpTo( _worldTx.NormalToWorld( constantMovement ) * constantMovement.Length, localSpace );
 		}
 
 		if ( Collision )
