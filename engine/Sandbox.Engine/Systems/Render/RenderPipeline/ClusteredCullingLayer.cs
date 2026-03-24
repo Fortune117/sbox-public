@@ -10,7 +10,7 @@ namespace Sandbox.Rendering;
 /// </summary>
 internal class ClusteredCullingLayer : ProceduralRenderLayer
 {
-	private static readonly IntVector3 ClusterCounts = new( 24, 16, 24 );
+	private static readonly IntVector3 ClusterCounts = new( 24, 16, 48 );
 
 	private const int MaxLightsPerCluster = 64;
 	private const int MaxEnvMapsPerCluster = 32;
@@ -18,7 +18,7 @@ internal class ClusteredCullingLayer : ProceduralRenderLayer
 
 	private static readonly int ClusterCount = ClusterCounts.x * ClusterCounts.y * ClusterCounts.z;
 
-	private static readonly ComputeShader _computeShader = new( "shaders/clustered_light_culling_cs.shader" );
+	private static ComputeShader _computeShader = new( "shaders/clustered_light_culling_cs.shader" );
 
 	private GpuBuffer _clusterLightCounts;
 	private GpuBuffer _clusterEnvCounts;

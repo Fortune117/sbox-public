@@ -1,4 +1,6 @@
-﻿namespace Sandbox;
+﻿using System.Text.Json.Serialization;
+
+namespace Sandbox;
 
 public static partial class Gizmo
 {
@@ -72,5 +74,34 @@ public static partial class Gizmo
 		/// Should we show lines representing GameObject references in action graphs?
 		/// </summary>
 		public bool DebugActionGraphs { get; set; } = false;
+
+		/// <summary>
+		/// Which gizmos are disabled
+		/// </summary>
+		[JsonInclude]
+		Dictionary<string, bool> DisabledGizmos { get; set; } = [];
+
+		/// <summary>
+		/// Check if a gizmo type is enabled
+		/// </summary>
+		public bool IsGizmoEnabled( Type type ) => type is not null && !DisabledGizmos.GetValueOrDefault( type.FullName );
+
+		/// <summary>
+		/// Set the enabled state of a gizmo type
+		/// </summary>
+		public void SetGizmoEnabled( Type type, bool enabled )
+		{
+			if ( type is null ) return;
+
+			DisabledGizmos[type.FullName] = !enabled;
+		}
+
+		/// <summary>
+		/// Clear all enabled gizmos
+		/// </summary>
+		public void ClearEnabledGizmos()
+		{
+			DisabledGizmos.Clear();
+		}
 	}
 }

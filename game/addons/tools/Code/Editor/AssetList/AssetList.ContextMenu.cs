@@ -210,7 +210,7 @@ public partial class AssetList
 		{
 			var dir = directories.First();
 
-			OpenFolderContextMenu( dir, false );
+			OpenFolderContextMenu( dir.DirectoryInfo.FullName, false );
 
 			return;
 		}
@@ -500,7 +500,17 @@ public partial class AssetList
 			} );
 	}
 
-	public static void OpenRenameFlyout( IAssetListEntry item, Vector2? position = null )
+	public static void OpenCreateFlyout( string resourceType, string defaultName, string extension, Action<string> onCreated, Vector2? position = null )
+	{
+		OpenLineEditFlyout( defaultName, $"What do you want to name {resourceType}?", position,
+			name =>
+			{
+				if ( string.IsNullOrWhiteSpace( name ) ) return;
+				onCreated( $"{name}{extension}" );
+			} );
+	}
+
+	public void OpenRenameFlyout( IAssetListEntry item, Vector2? position = null )
 	{
 		bool exactRename = item is AssetEntry ae && ae.Asset is null;
 
@@ -511,7 +521,12 @@ public partial class AssetList
 			name =>
 			{
 				if ( string.IsNullOrWhiteSpace( name ) ) return;
+
+				// rename WILL change the hashcode, but since selection's collection caches those
+				// we need to make sure it's updated - otherwise we'll get dupes!
+				bool wasSelected = Selection.Remove( item );
 				item.Rename( $"{name}{fileExt}" );
+				if ( wasSelected ) Selection.Add( item );
 			} );
 	}
 
@@ -575,7 +590,7 @@ public partial class AssetList
 			"editor.delete"
 			);
 
-			e.Menu.AddOption( $"Rename", "edit", action: () => OpenRenameFlyout( entry, e.ScreenPosition ), shortcut: "editor.rename" );
+			e.Menu.AddOption( $"Rename", "edit", action: () => e.AssetList.OpenRenameFlyout( entry, e.ScreenPosition ), shortcut: "editor.rename" );
 		}
 
 		if ( asset is not null )
@@ -639,8 +654,8 @@ public partial class AssetList
 
 			fcm.Menu.AddSeparator();
 
-			fcm.Menu.AddOption( "Delete", "delete", DeleteAsset, "editor.delete" );
-			fcm.Menu.AddOption( "Rename", "edit", () => OpenRenameFlyout( directoryInfo, fcm.ScreenPosition ), "editor.rename" );
+			fcm.Menu.AddOption( "Delete", "delete", DeleteAsset, "editor.delete" ).Enabled = directoryInfo.Exists;
+			fcm.Menu.AddOption( "Rename", "edit", () => OpenRenameFlyout( directoryInfo, fcm.ScreenPosition ), "editor.rename" ).Enabled = directoryInfo.Exists;
 		}
 
 		EditorEvent.Run( "folder.contextmenu", fcm );
@@ -648,17 +663,6 @@ public partial class AssetList
 		fcm.Menu.OpenAt( fcm.ScreenPosition, false );
 
 		return fcm;
-	}
-
-	void OpenFolderContextMenu( DirectoryEntry directory, bool isThisFolder )
-	{
-		var fcm = OpenFolderContextMenu( directory.DirectoryInfo.FullName, isThisFolder );
-
-		if ( !fcm.ThisFolder )
-		{
-			fcm.Menu.AddOption( "Delete", "delete", DeleteAsset, "editor.delete" );
-			fcm.Menu.AddOption( $"Rename", "edit", action: () => OpenRenameFlyout( directory, fcm.ScreenPosition ), shortcut: "editor.rename" );
-		}
 	}
 
 	static void BuildAllIconsR( List<Asset> assets )
@@ -694,7 +698,7 @@ public partial class AssetList
 	[Event( "folder.contextmenu", Priority = 50 )]
 	private static void OnFolderContextMenu_Pins( FolderContextMenu e )
 	{
-		if ( e.ThisFolder ) return;
+		if ( e.ThisFolder || !e.Target.Exists ) return;
 
 		e.Menu.AddOption( $"Pin", "push_pin", action: () => MainAssetBrowser.Instance.Local.AddPin( e.Target.FullName ) );
 	}
@@ -718,6 +722,10 @@ public partial class AssetList
 	[Event( "folder.contextmenu", Priority = 100 )]
 	private static void OnFolderContextMenu_BottomSection( FolderContextMenu e )
 	{
+		// only for folders that exist on disk
+		if ( e.Target is null || !e.Target.Exists )
+			return;
+
 		e.Menu.AddSeparator();
 
 		if ( !e.ThisFolder )
@@ -728,16 +736,13 @@ public partial class AssetList
 			o.Enabled = assets.Length > 0;
 		}
 
-		if ( e.Target != null )
+		e.Menu.AddSeparator();
+		e.Menu.AddOption( "Show in Explorer", "folder_open", () => EditorUtility.OpenFolder( e.Target.FullName ) );
+		e.Menu.AddOption( "Folder Metadata", "tune", () =>
 		{
-			e.Menu.AddSeparator();
-			e.Menu.AddOption( "Show in Explorer", "folder_open", () => EditorUtility.OpenFolder( e.Target.FullName ) );
-			e.Menu.AddOption( "Folder Metadata", "tune", () =>
-			{
-				var dialog = new FolderMetadataDialog( e.Target );
-				dialog.Show();
-			} );
-		}
+			var dialog = new FolderMetadataDialog( e.Target );
+			dialog.Show();
+		} );
 	}
 
 	#endregion

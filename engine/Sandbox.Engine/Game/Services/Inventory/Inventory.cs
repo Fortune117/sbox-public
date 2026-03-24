@@ -38,19 +38,38 @@ public static partial class Inventory
 			_items.Add( new Item( result.Get( i ) ) );
 		}
 
-		//
-		// If we had items previously then notify of new items. This is usually
-		// caused by a call to Refresh after an in-game purchase.
-		//
+		CurrentBlob = SerializeResult( result );
+
+		// If we had items previously then notify of new items. This is usually caused by a call to Refresh after an in-game purchase.
 		if ( previousItems.Count() > 0 )
 		{
 			var newItems = _items.ToList();
 			newItems.RemoveAll( x => previousItems.Any( y => y.ItemId == x.ItemId ) );
+
 			return newItems.ToArray();
 		}
 
 		result.Destroy();
 		return Array.Empty<Item>();
+	}
+
+	/// <summary>
+	/// That last serialized inventory proof for the local user, sent as part of UserInfo during connection
+	/// </summary>
+	internal static byte[] CurrentBlob { get; private set; } = Array.Empty<byte>();
+
+	private static unsafe byte[] SerializeResult( CSteamInventoryResult result )
+	{
+		var size = result.GetSerializedSize();
+		if ( size == 0 )
+			return Array.Empty<byte>();
+
+		var buffer = new byte[size];
+		fixed ( byte* ptr = buffer )
+		{
+			result.Serialize( ptr, size );
+		}
+		return buffer;
 	}
 
 	/// <summary>
@@ -90,20 +109,21 @@ public static partial class Inventory
 			await Task.Delay( 500 );
 
 			var newItems = await Refresh();
-			if ( newItems.Count() == 0 )
+			if ( newItems.Length > 0 )
 			{
-				if ( timer.ElapsedSeconds > 20 )
-					return false;
+				foreach ( var item in newItems )
+				{
+					Log.Info( $"Got item {item.ItemId} ({item.Definition?.Name})" );
+				}
 
-				continue;
+				return true;
 			}
 
-			foreach ( var item in newItems )
+			if ( timer.ElapsedSeconds > 20 )
 			{
-				Log.Info( $"Got item {item.ItemId} ({item.Definition?.Name})" );
+				Log.Warning( "Checkout timed out waiting for new items. Purchase may have been cancelled, or items may appear shortly." );
+				return false;
 			}
-
-			return true;
 		}
 	}
 

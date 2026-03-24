@@ -6,11 +6,28 @@ public static class SceneEditorMenus
 	[Shortcut( "editor.duplicate", "CTRL+D" )]
 	public static void Duplicate()
 	{
-		var selection = EditorScene.Selection.OfType<GameObject>().ToArray();
-
 		using ( SceneEditorSession.Active.UndoScope( "Duplicate Object(s)" ).WithGameObjectCreations().Push() )
 		{
+			SceneTraceResult? tr = null;
+
+			if ( EditorPreferences.PasteAtCursor &&
+				 SceneViewWidget.Current?.LastSelectedViewportWidget is { } viewport &&
+				 viewport.IsValid() )
+			{
+				using ( viewport.GizmoInstance.Push() )
+					if ( viewport.TryGetCursorTracePosition( out var result ) )
+						tr = result;
+			}
+
 			DuplicateInternal();
+
+			if ( tr is { } trace )
+			{
+				EditorScene.PlaceBoundsOnSurface(
+					EditorScene.Selection.OfType<GameObject>(),
+					trace.HitPosition,
+					trace.Normal );
+			}
 		}
 	}
 
@@ -37,7 +54,6 @@ public static class SceneEditorMenus
 		foreach ( var entry in groups )
 		{
 			var clone = entry.Key.Clone();
-
 			clone.WorldTransform = entry.Key.WorldTransform;
 			entry.Value.AddSibling( clone, false );
 
@@ -92,8 +108,12 @@ public static class SceneEditorMenus
 			if ( lastSelected != null )
 			{
 				var nextSelect = lastSelected.GetNextSibling( false );
-				if ( !nextSelect.IsValid() )
-					nextSelect = lastSelected.Parent;
+				while ( nextSelect.IsValid() && nextSelect.Flags.Contains( GameObjectFlags.Hidden ) )
+					nextSelect = nextSelect.GetNextSibling( false );
+
+				for ( var p = lastSelected.Parent; !nextSelect.IsValid() && p.IsValid(); p = p.Parent )
+					if ( !p.Flags.Contains( GameObjectFlags.Hidden ) )
+						nextSelect = p;
 
 				if ( SceneEditorSession.Active.Selection.Contains( lastSelected ) )
 				{
@@ -118,23 +138,14 @@ public static class SceneEditorMenus
 		if ( selectedObjects.Length == 0 )
 			return;
 
-		var bbox = new BBox();
+		var bbox = selectedObjects[0].GetBounds()
+			.AddBBox( BBox.FromPositionAndSize( selectedObjects[0].WorldPosition, 16 ) );
 
-		int i = 0;
-		foreach ( var entry in selectedObjects )
+		// Get the bounding box of the selected objects
+		for ( int i = 1; i < selectedObjects.Length; i++ )
 		{
-			if ( i++ == 0 )
-			{
-				bbox = BBox.FromPositionAndSize( entry.WorldPosition, 16 );
-			}
-
-			// get the bounding box of the selected objects
-			bbox = bbox.AddBBox( BBox.FromPositionAndSize( entry.WorldPosition, 16 ) );
-
-			foreach ( var model in entry.Components.GetAll<ModelRenderer>( FindMode.EnabledInSelfAndDescendants ) )
-			{
-				bbox = bbox.AddBBox( model.Bounds );
-			}
+			bbox = bbox.AddBBox( selectedObjects[i].GetBounds() );
+			bbox = bbox.AddBBox( BBox.FromPositionAndSize( selectedObjects[i].WorldPosition, 16 ) );
 		}
 
 		selectedObjects.First().Scene.Editor.FrameTo( bbox );
@@ -352,7 +363,7 @@ public static class SceneEditorMenus
 
 				foreach ( var go in gos )
 				{
-					go.WorldPosition += delta;
+					go.WorldPosition -= delta;
 				}
 			}
 		}

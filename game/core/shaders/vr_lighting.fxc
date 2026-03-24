@@ -18,6 +18,7 @@ Texture2D g_tBlueNoise : register(t0) < Attribute("BlueNoise"); > ;
 
 #include "common/classes/_classes.hlsl"
 #include "common/BRDF.hlsl"
+#include "common/DDGI/DDGI.hlsl"
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------
 // Debug visualization
@@ -482,7 +483,7 @@ void ComputeDirectLighting( inout LightingTerms_t o, const FinalCombinerInput_t 
 	o.vSpecular 	= float3( 0.0, 0.0, 0.0 );
 	o.vTransmissive = float3( 0.0, 0.0, 0.0 );
 
-	ClusterRange lightRange = Cluster::Query( ClusterItemType_Light, f.vPositionWs );
+	ClusterRange lightRange = Cluster::Query( ClusterItemType_Light, f.vPositionSs );
 
 	[loop]
 	for ( uint i = 0; i < lightRange.Count; i++ )
@@ -569,9 +570,7 @@ void CalculateIndirectLighting( inout LightingTerms_t lightingTerms, const Final
 	bool bHasBakedLighting = true;
 	bool bHasCubeBrightnessNormalization = true;
 
-	//
-	// Add Baked Lighting Contribution
-	//
+
 	if ( LightmappedLight::UsesLightmaps() )
 	{
 		float3 vLightmapUVW = float3( finalCombinerData.vLightmapUV, 0 );
@@ -696,6 +695,25 @@ void CalculateIndirectLighting( inout LightingTerms_t lightingTerms, const Final
 		lightingTerms.vIndirectDiffuse.rgb = lerp( 1.0f, AmbientLightColor.rgb, AmbientLightColor.a ) ;
 	}
 
+    //
+    // Add DDGI indirect lighting
+	// This is done after lightmaps/probes because those actually calculate direct lighting on this block :^(
+    //
+	if ( DDGI::IsEnabled() )
+	{
+		DDGIVolume ddgiVolume = DDGI::GetVolume( vPositionWs );
+		if ( ddgiVolume.IsValid() )
+		{
+			float3 ddgiIrradiance = DDGI::Evaluate( ddgiVolume, vPositionWs, vNormalWs, vPositionToCameraDirWs.xyz );
+			lightingTerms.vIndirectDiffuse.rgb = ddgiIrradiance;
+
+			bHasBakedLighting = true;
+			bHasCubeBrightnessNormalization = true;
+
+			flTargetLuminanceOfCubemap = RelativeLuminance( ddgiIrradiance );
+		}
+	}
+
 	//
 	// Apply specular from cube maps
 	//
@@ -715,7 +733,7 @@ void CalculateIndirectLighting( inout LightingTerms_t lightingTerms, const Final
 		
         float flDistAccumulated = 0;
 
-		ClusterRange envRange = Cluster::Query( ClusterItemType_EnvMap, vPositionWs );
+		ClusterRange envRange = Cluster::Query( ClusterItemType_EnvMap, finalCombinerData.vPositionSs );
 
 		float2 vLevel = vSQRTRoughness.xy;
 		

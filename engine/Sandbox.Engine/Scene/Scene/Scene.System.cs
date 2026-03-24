@@ -1,16 +1,18 @@
-﻿namespace Sandbox;
+﻿using System.Text.Json.Nodes;
+
+namespace Sandbox;
 
 [Expose]
 public partial class Scene
 {
-	List<GameObjectSystem> systems = new List<GameObjectSystem>();
+	Dictionary<Type, GameObjectSystem> systems = new();
 
 	/// <summary>
 	/// Call dispose on all installed hooks
 	/// </summary>
 	void ShutdownSystems()
 	{
-		foreach ( var sys in systems )
+		foreach ( var sys in systems.Values )
 		{
 			// Can become null during hotload development
 			if ( sys is null ) continue;
@@ -44,11 +46,99 @@ public partial class Scene
 
 			foreach ( var f in found )
 			{
-				var e = f.Create<GameObjectSystem>( new object[] { this } );
+				var e = f.Create<GameObjectSystem>( [this] );
 				if ( e is null ) continue;
 
-				systems.Add( e );
+				ApplyGameObjectSystemConfig( e );
+
+				systems[e.GetType()] = e;
 				AddObjectToDirectory( e );
+			}
+		}
+	}
+
+	/// <summary>
+	/// Apply configuration values to a GameObjectSystem with priority:
+	/// 1. Project-wide value (from <see cref="ProjectSettings.Systems"/>)
+	/// 2. Default value (already set by property initializer)
+	/// Scene-specific overrides are applied during deserialization via <see cref="ApplyGameObjectSystemOverrides"/>
+	/// </summary>
+	void ApplyGameObjectSystemConfig( GameObjectSystem system )
+	{
+		var systemType = Game.TypeLibrary.GetType( system.GetType() );
+		if ( systemType is null ) return;
+
+		using ( Push() )
+		{
+			foreach ( var property in systemType.Properties.Where( x => x.HasAttribute<PropertyAttribute>() ) )
+			{
+				if ( !property.CanWrite ) continue;
+
+				// Apply project-wide value if it exists
+				if ( ProjectSettings.Systems.TryGetPropertyValue( systemType, property, out var value ) )
+				{
+					try
+					{
+						property.SetValue( system, value );
+					}
+					catch ( Exception ex )
+					{
+						Log.Warning( $"Failed to apply config value to {systemType.FullName}.{property.Name}: {ex.Message}" );
+					}
+				}
+			}
+		}
+	}
+
+	/// <summary>
+	/// Apply scene-specific GameObjectSystem property overrides.
+	/// Called during scene deserialization.
+	/// </summary>
+	internal void ApplyGameObjectSystemOverrides( JsonNode overridesNode )
+	{
+		if ( overridesNode is null )
+			return;
+
+		Dictionary<string, JsonObject> overrides;
+
+		try
+		{
+			overrides = Json.FromNode<Dictionary<string, JsonObject>>( overridesNode );
+		}
+		catch ( System.Exception e )
+		{
+			Log.Warning( e, $"Error when deserializing GameObjectSystem overrides ({e.Message})" );
+			return;
+		}
+
+		if ( overrides is null || overrides.Count == 0 )
+			return;
+
+		foreach ( var system in systems.Values )
+		{
+			var systemType = Game.TypeLibrary.GetType( system.GetType() );
+			if ( systemType is null ) continue;
+
+			if ( !overrides.TryGetValue( systemType.FullName, out var properties ) )
+				continue;
+
+			foreach ( var property in systemType.Properties.Where( x => x.HasAttribute<PropertyAttribute>() ) )
+			{
+				if ( !property.CanWrite ) continue;
+
+				if ( properties.TryGetPropertyValue( property.Name, out var valueNode ) )
+				{
+					try
+					{
+						// Deserialize the JSON node directly to the property's type
+						var value = Json.FromNode( valueNode, property.PropertyType );
+						property.SetValue( system, value );
+					}
+					catch ( Exception ex )
+					{
+						Log.Warning( $"Failed to apply scene override to {systemType.FullName}.{property.Name}: {ex.Message}" );
+					}
+				}
 			}
 		}
 	}
@@ -109,7 +199,7 @@ public partial class Scene
 	/// </summary>
 	public T GetSystem<T>() where T : GameObjectSystem
 	{
-		return systems.OfType<T>().FirstOrDefault();
+		return systems.TryGetValue( typeof( T ), out var sys ) ? sys as T : null;
 	}
 
 	/// <summary>
@@ -117,7 +207,7 @@ public partial class Scene
 	/// </summary>
 	public void GetSystem<T>( out T val ) where T : GameObjectSystem
 	{
-		val = systems.OfType<T>().FirstOrDefault();
+		val = systems.TryGetValue( typeof( T ), out var sys ) ? sys as T : null;
 	}
 
 	/// <summary>
@@ -125,14 +215,14 @@ public partial class Scene
 	/// </summary>
 	internal GameObjectSystem GetSystemByType( TypeDescription type )
 	{
-		return systems.FirstOrDefault( s => s.GetType() == type.TargetType );
+		return systems.TryGetValue( type.TargetType, out var sys ) ? sys : null;
 	}
 
 	/// <summary>
 	/// Get all systems belonging to this scene.
 	/// </summary>
-	internal IEnumerable<GameObjectSystem> GetSystems()
+	internal Dictionary<Type, GameObjectSystem>.ValueCollection GetSystems()
 	{
-		return systems;
+		return systems.Values;
 	}
 }

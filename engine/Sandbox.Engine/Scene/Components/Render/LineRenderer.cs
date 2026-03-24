@@ -129,13 +129,12 @@ public sealed class LineRenderer : Renderer, Component.ExecuteInEditor
 			_points.Clear();
 			_normals.Clear();
 
-			_points.AddRange( Points
-					.Where( x => x.IsValid() && x.Active )
-					.Select( x => x.WorldPosition ) );
-
-			_normals.AddRange( Points
-					.Where( x => x.IsValid() && x.Active )
-					.Select( x => x.WorldRotation.Up ) );
+			foreach ( var p in Points )
+			{
+				if ( !p.IsValid() || !p.Active ) continue;
+				_points.Add( p.WorldPosition );
+				_normals.Add( p.WorldRotation.Up );
+			}
 		}
 		else
 		{
@@ -165,7 +164,7 @@ public sealed class LineRenderer : Renderer, Component.ExecuteInEditor
 		_so.EndCap = EndCap;
 		_so.Face = Face;
 		_so.Wireframe = Wireframe;
-		_so.Clamped = Texturing.Clamp;
+		_so.SamplerState = new() { Filter = Texturing.FilterMode, AddressModeU = Texturing.TextureAddressMode, AddressModeV = Texturing.TextureAddressMode };
 
 		_so.RenderingEnabled = true;
 		_so.Transform = transform;

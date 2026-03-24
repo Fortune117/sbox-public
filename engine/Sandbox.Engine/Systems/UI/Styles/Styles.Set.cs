@@ -143,6 +143,9 @@ namespace Sandbox.UI
 				case "font-style":
 					return SetFontStyle( value );
 
+				case "font-variant-numeric":
+					return SetFontVariantNumeric( value );
+
 				case "white-space":
 					return SetWhiteSpace( value );
 
@@ -216,6 +219,9 @@ namespace Sandbox.UI
 
 				case "object-fit":
 					return SetObjectFit( value );
+
+				case "outline":
+					return SetOutline( value );
 			}
 
 			return base.Set( property, value );
@@ -1256,6 +1262,22 @@ namespace Sandbox.UI
 			return true;
 		}
 
+		bool SetFontVariantNumeric( string value )
+		{
+			switch ( value.Trim().ToLowerInvariant() )
+			{
+				case "normal":
+					FontVariantNumeric = UI.FontVariantNumeric.Normal;
+					return true;
+				case "tabular-nums":
+					FontVariantNumeric = UI.FontVariantNumeric.TabularNums;
+					return true;
+				default:
+					Log.Warning( $"Unhandled font-variant-numeric property: {value}" );
+					return false;
+			}
+		}
+
 		bool SetWhiteSpace( string value )
 		{
 			switch ( value )
@@ -2202,6 +2224,12 @@ namespace Sandbox.UI
 			}
 
 			return false;
+		}
+
+		bool SetOutline( string value )
+		{
+			// Same behaviour as border
+			return SetBorder( value, v => OutlineWidth = v, c => OutlineColor = c );
 		}
 
 		Length? GetAngleInDegrees( string value )

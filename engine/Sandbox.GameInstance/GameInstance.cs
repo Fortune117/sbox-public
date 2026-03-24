@@ -11,14 +11,14 @@ namespace Sandbox;
 /// <summary>
 /// Holds the state of a game menu
 /// </summary>
-internal partial class GameInstance : IGameInstance
+internal class GameInstance : IGameInstance
 {
 	public string Ident { get; set; }
 
 	/// <summary>
-	/// True if this is a game we've joined as a multiplayer client
+	/// Whether we're joining as a client to a host that is running in an editor session.
 	/// </summary>
-	public bool IsDeveloperHost => flags.Contains( GameLoadingFlags.Developer );
+	protected bool IsDeveloperHost => flags.Contains( GameLoadingFlags.Developer );
 
 	public bool WantsToQuit { get; private set; }
 
@@ -41,7 +41,7 @@ internal partial class GameInstance : IGameInstance
 	/// </summary>
 	public bool IsRemote => activePackage?.Package?.IsRemote ?? false;
 
-	protected Sandbox.PackageManager.ActivePackage activePackage;
+	protected PackageManager.ActivePackage activePackage;
 	protected Package _package;
 	protected Package _mapPackage;
 
@@ -114,6 +114,8 @@ internal partial class GameInstance : IGameInstance
 		if ( activePackage != null && !Application.IsStandalone )
 		{
 			Game.Language?.Shutdown();
+			Game.Language = null;
+
 			FileSystem.Mounted?.UnMount( activePackage.FileSystem );
 
 			activePackage = null;
@@ -139,7 +141,7 @@ internal partial class GameInstance : IGameInstance
 		ErrorReporter.ResetCounters();
 	}
 
-	public Sandbox.InputSettings InputSettings => ProjectSettings.Input;
+	public InputSettings InputSettings => ProjectSettings.Input;
 
 	/// <summary>
 	/// Attempt to download this package and mount it as a game menu
@@ -164,13 +166,15 @@ internal partial class GameInstance : IGameInstance
 		Application.GamePackage = _package;
 		Application.ExceptionCount = default;
 
+		EngineFileSystem.ProjectSettings = new AggregateFileSystem();
+		Game.Language = new LanguageContainer();
+
 		//
 		// When joining a server, we don't mind if the package is missing or bullshit
 		// because they might have some assemblies that run the game.
 		//
 		if ( Package is null && IsDeveloperHost )
 		{
-			EngineFileSystem.ProjectSettings = new AggregateFileSystem();
 			LoadProjectSettings();
 			SetupFileWatch();
 			return true;
@@ -218,9 +222,9 @@ internal partial class GameInstance : IGameInstance
 
 		try
 		{
-			// Load the package. Mount it and add it to the file system.
-			// Only load the assemblies inside the package if we're not a developer host
-			// (If we're a develop host we load assemblies from the network table)
+			// Load the package. Mount it and add it to the file system. Only load the assemblies
+			// inside the package if we're not a developer host. If we're a developer host, we
+			// load assemblies from the network table.
 			if ( !enroller.LoadPackage( Package.FullIdent, !IsDeveloperHost ) )
 			{
 				if ( IsDeveloperHost )
@@ -230,7 +234,7 @@ internal partial class GameInstance : IGameInstance
 				return false;
 			}
 		}
-		catch ( System.Exception e )
+		catch ( Exception e )
 		{
 			Log.Warning( e, $"Exception when loading {Package.FullIdent}: {e.Message}" );
 			return false;
@@ -261,15 +265,19 @@ internal partial class GameInstance : IGameInstance
 
 		FileSystem.Mounted.Mount( activePackage.FileSystem );
 
-		EngineFileSystem.ProjectSettings = new AggregateFileSystem();
 		EngineFileSystem.ProjectSettings.Mount( activePackage.ProjectSettings );
-
-		Game.Language = new LanguageContainer( activePackage.Localization );
+		Game.Language.FileSystem.Mount( activePackage.Localization );
+		Game.Language.Refresh();
 
 		LoadProjectSettings();
 
-		Log.Trace( $"Loading GameResources" );
-		ResourceLoader.LoadAllGameResource( FileSystem.Mounted );
+		// If the host is a developer session, we don't want to load all game resources yet. This will be
+		// done via the network tables.
+		if ( !IsDeveloperHost )
+		{
+			Log.Trace( $"Loading GameResources" );
+			ResourceLoader.LoadAllGameResource( FileSystem.Mounted );
+		}
 
 		if ( !achievementTask.IsCompleted )
 		{
@@ -289,7 +297,7 @@ internal partial class GameInstance : IGameInstance
 		{
 			GameInstanceDll.Current.UpdateProjectConfig( Package );
 		}
-		catch ( System.Exception e )
+		catch ( Exception e )
 		{
 			Log.Warning( e, $"Exception when loading {Package.FullIdent}: {e.Message}" );
 			return false;
@@ -515,7 +523,7 @@ internal partial class GameInstance : IGameInstance
 	}
 }
 
-class MenuLoadingScreen : Sandbox.Internal.ILoadingInterface
+class MenuLoadingScreen : ILoadingInterface
 {
 	public void Dispose()
 	{

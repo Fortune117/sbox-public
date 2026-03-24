@@ -11,6 +11,7 @@ public class FastTextureWindow : Window
 	public RectView _RectView { get; private set; }
 
 	private IDisposable _undoScope;
+	private (Vector2 Min, Vector2 Max)? _savedRectBounds = null;
 
 	public FastTextureWindow() : base()
 	{
@@ -30,13 +31,19 @@ public class FastTextureWindow : Window
 
 		_RectView.Layout.AddStretchCell();
 
-		DockManager.RegisterDockType( "Rect View", "space_dashboard", null, false );
-		DockManager.AddDock( null, _RectView, DockArea.Right, DockManager.DockProperty.HideOnClose, 0.0f );
+		Canvas = _RectView;
 
 		ToolBar.Visible = false;
 		MenuBar.Visible = false;
+	}
 
-		RestoreDefaultDockLayout();
+	public override void Close()
+	{
+		base.Destroy();
+	}
+
+	protected override void OnClosed()
+	{
 	}
 
 	public static void OpenWith( MeshFace[] faces, Material material = null )
@@ -86,7 +93,35 @@ public class FastTextureWindow : Window
 
 		Settings.FastTextureSettings.Load();
 
+		// Get the initial rect from the existing UVs
+		var originalMapping = Settings.FastTextureSettings.Mapping;
+		Settings.FastTextureSettings.Mapping = MappingMode.UseExisting;
 		InitRectanglesFromMeshFaces();
+
+		var meshRect = Document.Rectangles.OfType<Document.MeshRectangle>().FirstOrDefault();
+		if ( meshRect != null )
+		{
+			// Constrain the rectangle to UV space [0,1]
+			var min = new Vector2(
+				Math.Clamp( meshRect.Min.x, 0f, 1f ),
+				Math.Clamp( meshRect.Min.y, 0f, 1f )
+			);
+			var max = new Vector2(
+				Math.Clamp( meshRect.Max.x, 0f, 1f ),
+				Math.Clamp( meshRect.Max.y, 0f, 1f )
+			);
+
+			if ( min.x < max.x && min.y < max.y )
+			{
+				meshRect.Min = min;
+				meshRect.Max = max;
+			}
+
+			_savedRectBounds = (meshRect.Min, meshRect.Max);
+		}
+
+		// Restore original mapping mode (this will trigger OnMappingModeChanged which handles the rest)
+		Settings.FastTextureSettings.Mapping = originalMapping;
 
 		Settings.ReferenceMaterial = material?.ResourcePath;
 		_RectView?.SetMaterial( material );
@@ -182,10 +217,27 @@ public class FastTextureWindow : Window
 		var meshRect = Document.Rectangles.OfType<Document.MeshRectangle>().FirstOrDefault();
 		if ( meshRect != null )
 		{
-			bool shouldResetBounds = meshRect.PreviousMappingMode == MappingMode.UseExisting
-								  && Settings.FastTextureSettings.Mapping != MappingMode.UseExisting;
+			var currentMapping = Settings.FastTextureSettings.Mapping;
+			var previousMapping = meshRect.PreviousMappingMode;
+
+			// Save previous rectangle bounds when switching to UseExisting
+			if ( previousMapping != MappingMode.UseExisting && currentMapping == MappingMode.UseExisting )
+			{
+				_savedRectBounds = (meshRect.Min, meshRect.Max);
+			}
+
+			bool shouldResetBounds = previousMapping == MappingMode.UseExisting
+							  && currentMapping != MappingMode.UseExisting;
 
 			meshRect.ApplyMapping( Settings.FastTextureSettings, shouldResetBounds );
+
+			// Restore previously saved rectangle bounds
+			if ( shouldResetBounds && _savedRectBounds.HasValue )
+			{
+				meshRect.Min = _savedRectBounds.Value.Min;
+				meshRect.Max = _savedRectBounds.Value.Max;
+			}
+
 			UpdateMeshFaces();
 			Update();
 		}
@@ -252,7 +304,7 @@ public class FastTextureWindow : Window
 		_undoScope?.Dispose();
 		_undoScope = null;
 
-		return base.OnClose();
+		return true;
 	}
 }
 
@@ -478,6 +530,7 @@ public class RectViewToolbar : Widget
 				xInset.Icon = "swap_horiz";
 				xInset.MinimumWidth = 160;
 				xInset.Enabled = Settings.ScaleMode != ScaleMode.WorldScale;
+				col.AddSpacingCell( 8 );
 
 				var yInset = col.Add( new FloatControlWidget( so.GetProperty( nameof( FastTextureSettings.InsetY ) ) ) );
 				yInset.FixedHeight = Theme.RowHeight;
@@ -486,6 +539,28 @@ public class RectViewToolbar : Widget
 				yInset.Icon = "import_export";
 				yInset.MinimumWidth = 160;
 				yInset.Enabled = Settings.ScaleMode != ScaleMode.WorldScale;
+			} );
+
+			AddGroup( insetCol, "View Mode", layout =>
+			{
+				var debugview = new ComboBox();
+				debugview.AddItem( "Default", "texture" );
+				debugview.AddItem( "Roughness", "grain" );
+				debugview.AddItem( "Normals", "waves" );
+				debugview.CurrentIndex = ((int)Window.Settings.FastTextureSettings.DebugMode);
+				debugview.ItemChanged += () =>
+				{
+					Settings.DebugMode = debugview.CurrentIndex switch
+					{
+						0 => DebugMode.Default,
+						1 => DebugMode.Roughness,
+						2 => DebugMode.Normals,
+						_ => DebugMode.Default
+					};
+					Window._RectView?.SetMaterial( Material.Load( Window.Settings.ReferenceMaterial ) );
+				};
+
+				layout.Add( debugview );
 			} );
 		}
 

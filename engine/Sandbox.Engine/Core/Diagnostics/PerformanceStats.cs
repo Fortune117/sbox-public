@@ -1,5 +1,4 @@
-﻿using Sandbox.VR;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace Sandbox.Diagnostics;
@@ -108,6 +107,8 @@ public static partial class PerformanceStats
 		GcPause = pauseTicks - _prevPauseTime;
 		_prevPauseTime = pauseTicks;
 
+		Timings.GcPause.AddMilliseconds( TimeSpan.FromTicks( GcPause ).TotalMilliseconds );
+
 		var gen0 = GC.CollectionCount( 0 );
 		var gen1 = GC.CollectionCount( 1 );
 		var gen2 = GC.CollectionCount( 2 );
@@ -158,10 +159,6 @@ public static partial class PerformanceStats
 
 		_history.Clear();
 		secondTimer.Restart();
-
-		// Fetch VR stats in VR mode
-		if ( VRSystem.IsActive )
-			VR = VRSystem.GetPerformanceStats();
 
 		FrameStats._current = new FrameStats( NativeEngine.CSceneSystem.GetPerFrameStats() );
 

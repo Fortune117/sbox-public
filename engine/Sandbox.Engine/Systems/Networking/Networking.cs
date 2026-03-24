@@ -89,7 +89,9 @@ public static partial class Networking
 			case FlagLz4:
 				{
 					int written = LZ4.DecompressBlock( payload.ToArray(), ReceiveBuffer );
-					return ReceiveBuffer.AsSpan( 0, written );
+					var result = ReceiveBuffer.AsSpan( 0, written );
+					TryRecordMessage( result );
+					return result;
 				}
 			default:
 				return data;
@@ -196,11 +198,8 @@ public static partial class Networking
 	[ConVar( "net_debug", ConVarFlags.Protected )]
 	internal static bool Debug { get; set; }
 
-	[ConVar( "net_shared_query_port", ConVarFlags.Protected )]
-	internal static bool SharedQueryPort { get; set; } = true;
-
-	[ConVar( "net_use_fake_ip", ConVarFlags.Protected )]
-	internal static bool UseFakeIP { get; set; } = true;
+	[ConVar( "net_hide_address", ConVarFlags.Protected )]
+	internal static bool HideAddress { get; set; } = true;
 
 	[ConVar( "net_game_server_token", ConVarFlags.Protected )]
 	internal static string GameServerToken { get; set; } = string.Empty;
@@ -213,6 +212,9 @@ public static partial class Networking
 
 	[ConVar( "net_fakelag", ConVarFlags.Protected | ConVarFlags.Cheat, Help = "Simulate latency in ms" )]
 	internal static int FakeLag { get; set; } = 0;
+
+	[ConVar( "net_query_port", ConVarFlags.Protected )]
+	internal static int QueryPort { get; set; } = 27016;
 
 	[ConCmd( "hostname", ConVarFlags.Protected | ConVarFlags.Admin )]
 	private static void SetHostname( string name )
@@ -247,6 +249,10 @@ public static partial class Networking
 	/// Get the latest host stats such as bandwidth used and the current frame rate.
 	/// </summary>
 	public static HostStats HostStats => System?.HostStats ?? default;
+
+	// Wire-level network stats for this machine, aggregated across all non-local connections.
+	// Post-compression, post-framing bytes as reported by the transport layer.
+	internal static ConnectionStats LocalStats { get; private set; }
 
 	/// <summary>
 	/// True if we can be considered the host of this session. Either we're not connected to a server, or we are host of a server.
@@ -328,8 +334,6 @@ public static partial class Networking
 		utils.SetConfig( NetConfig.P2P_Transport_ICE_Enable, Defines.k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All );
 		utils.SetConfig( NetConfig.P2P_STUN_ServerList, "stun.l.google.com:19302,stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302" );
 
-		utils.InitializeRelayNetwork();
-
 		sockets.StartAuthentication();
 	}
 
@@ -373,6 +377,7 @@ public static partial class Networking
 	{
 		MaxPlayers = 0;
 		ServerData.Clear();
+		LocalStats = default;
 	}
 
 	private static int? OldFakePacketLoss { get; set; }
@@ -399,6 +404,44 @@ public static partial class Networking
 		OldFakeLag = FakeLag;
 	}
 
+	/// <summary>
+	/// Aggregate wire stats across all active non-local connections, expose them via
+	/// <see cref="LocalStats"/>, and feed them into the performance telemetry pipeline
+	/// so they appear in activity updates alongside frametime and render stats.
+	/// </summary>
+	private static void UpdateLocalStats()
+	{
+		if ( System is null )
+		{
+			LocalStats = default;
+			return;
+		}
+
+		var totalIn = 0f;
+		var totalOut = 0f;
+		var totalPing = 0;
+		var connectionCount = 0;
+
+		// Iterate System.Connections (real wire connections in the NetworkSystem) rather than
+		// Connection.All, which allocates and includes mock ConnectionInfo entries with zero stats.
+		foreach ( var c in System.Connections )
+		{
+			var s = c.Stats;
+			totalIn += s.InBytesPerSecond;
+			totalOut += s.OutBytesPerSecond;
+			totalPing += s.Ping;
+			connectionCount++;
+		}
+
+		LocalStats = new ConnectionStats( "local" )
+		{
+			InBytesPerSecond = totalIn,
+			OutBytesPerSecond = totalOut,
+			// Average ping across real wire connections; on a client this is just the host ping
+			Ping = connectionCount > 0 ? totalPing / connectionCount : 0,
+		};
+	}
+
 	internal static void PreFrameTick()
 	{
 		UpdateFakeLag();
@@ -410,6 +453,7 @@ public static partial class Networking
 			System?.SendTableUpdates();
 			System?.SendHeartbeat();
 			System?.SendHostStats();
+			UpdateLocalStats();
 		}
 		catch ( Exception e )
 		{
@@ -468,10 +512,17 @@ public static partial class Networking
 	/// </summary>
 	public static void CreateLobby( LobbyConfig config )
 	{
-		// Let's not make a lobby if we're in the editor and we're not playing a game.
+		// Let's not make a lobby if we're in the editor, and we're not playing a game.
 		// Editor tools could call this, and we don't want a lingering lobby.
 		if ( Application.IsEditor && !Game.IsPlaying )
 			throw new UnauthorizedAccessException( "Unable to create a lobby outside of a game" );
+
+		// If this game can only be hosted on a Dedicated Server, ensure that we are one. We'll allow
+		// the Editor to host a lobby as well, though, for testing and development purposes.
+		var launchMode = Application.GamePackage?.GetCachedMeta( "LaunchMode", "default" ).ToLower();
+
+		if ( launchMode == "dedicatedserveronly" && !Application.IsDedicatedServer && !Application.IsEditor )
+			throw new UnauthorizedAccessException( "This game can only be hosted on a Dedicated Server" );
 
 		if ( IsActive )
 			return;

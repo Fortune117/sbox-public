@@ -41,7 +41,7 @@ public partial class Scene : GameObject
 			}
 		}
 
-		foreach ( var system in systems )
+		foreach ( var system in systems.Values )
 		{
 			if ( system is GameObjectSystem.ITraceProvider traceProvider )
 			{
@@ -85,7 +85,7 @@ public partial class Scene : GameObject
 			}
 		}
 
-		foreach ( var system in systems )
+		foreach ( var system in systems.Values )
 		{
 			if ( system is GameObjectSystem.ITraceProvider traceProvider )
 			{
@@ -500,11 +500,16 @@ public partial struct SceneTrace
 	}
 
 	/// <summary>
-	/// Should we hit meshes too? This can be slow and only really recommended for editor work.
+	/// Should we hit meshes too? This can be slow and only works for the editor.
 	/// </summary>
 	[ActionGraphInclude, Group( "Filters" )]
 	public readonly SceneTrace UseRenderMeshes( bool hit = true )
 	{
+		if ( !Application.IsEditor )
+		{
+			Log.Error( "UseRenderMeshes is only available in edito" );
+			return this;
+		}
 		var t = this;
 		t.IncludeRenderMeshes = hit;
 		t.CullMode = 2;
@@ -512,11 +517,16 @@ public partial struct SceneTrace
 	}
 
 	/// <summary>
-	/// Should we hit meshes too? This can be slow and only really recommended for editor work.
+	/// Should we hit meshes too? This can be slow and only works for the editor.
 	/// </summary>
 	[ActionGraphInclude, Group( "Filters" )]
 	public readonly SceneTrace UseRenderMeshes( bool hitFront, bool hitBack )
 	{
+		if ( !Application.IsEditor )
+		{
+			Log.Error( "UseRenderMeshes is only available in edito" );
+			return this;
+		}
 		var t = this;
 		t.IncludeRenderMeshes = hitFront || hitBack;
 		t.CullMode = hitFront && hitBack ? 0 : hitFront ? 2 : 1;

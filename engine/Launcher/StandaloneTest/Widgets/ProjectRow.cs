@@ -81,9 +81,9 @@ public partial class ProjectRow : ItemRow
 			Paint.Antialiasing = true;
 			Paint.ClearPen();
 
-			Paint.SetPen( Theme.SurfaceLightBackground );
-
 			if ( Paint.HasMouseOver )
+				Paint.SetPen( Theme.Text );
+			else
 				Paint.SetPen( Theme.TextLight );
 
 			Paint.DrawIcon( MoreButton.LocalRect, "more_vert", 16.0f );
@@ -108,12 +108,10 @@ public partial class ProjectRow : ItemRow
 			Paint.Antialiasing = true;
 			Paint.ClearPen();
 
-			if ( Project.Pinned )
+			if ( Project.Pinned || Paint.HasMouseOver )
 				Paint.SetPen( Theme.Text );
-			else if ( Paint.HasMouseOver )
-				Paint.SetPen( Theme.TextLight );
 			else
-				Paint.SetPen( Theme.SurfaceLightBackground );
+				Paint.SetPen( Theme.TextLight );
 
 			Paint.DrawIcon( PinButton.LocalRect, "push_pin", 16.0f );
 
@@ -149,6 +147,7 @@ public partial class ProjectRow : ItemRow
 		var args = new StringBuilder();
 		if ( launchFlags.Contains( LaunchFlags.VR ) ) args.Append( " -vr" );
 		if ( launchFlags.Contains( LaunchFlags.VulkanValidation ) ) args.Append( " -vulkan_enable_validation -vulkan_validation_error_assert" );
+		if ( launchFlags.Contains( LaunchFlags.VRDebug ) ) args.Append( " -vrdebug" );
 
 		return args.ToString();
 	}
@@ -198,7 +197,7 @@ public partial class ProjectRow : ItemRow
 
 		if ( hasThumb )
 		{
-			Paint.Draw( iconRect, Package.Thumb );
+			Paint.Draw( iconRect, Package.Thumb, borderRadius: 4 );
 		}
 		else
 		{

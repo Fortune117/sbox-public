@@ -29,6 +29,10 @@ public partial class SoundHandle : IValid, IDisposable
 	/// </summary>
 	internal float _CreatedTime;
 
+	/// Sorts by creation time descending; static to avoid per-call allocations.
+	internal static readonly IComparer<SoundHandle> ByCreatedTimeDescending =
+		Comparer<SoundHandle>.Create( static ( x, y ) => y._CreatedTime.CompareTo( x._CreatedTime ) );
+
 	/// <summary>
 	/// An empty, do nothing sound, that we can return to avoid NREs
 	/// </summary>
@@ -104,6 +108,11 @@ public partial class SoundHandle : IValid, IDisposable
 	/// </summary>
 	public Curve Fadeout { get; set; } = new Curve( new( 0, 1 ), new( 1, 0 ) );
 
+	/// <summary>
+	/// The fadein curve for when the sound starts.
+	/// </summary>
+	public Curve Fadein { get; set; } = new Curve( new( 0, 0 ), new( 1, 1 ) );
+
 
 	[Obsolete( "This is not used anymore" )]
 	public float Decibels { get; set; } = 70.0f;
@@ -165,6 +174,12 @@ public partial class SoundHandle : IValid, IDisposable
 	public Mixer TargetMixer { get; set; }
 
 	/// <summary>
+	/// Marks this sound as voice/speech audio (e.g., from VoiceComponent).
+	/// Voice sounds use cheaper HRTF interpolation since they don't benefit from bilinear filtering.
+	/// </summary>
+	internal bool IsVoice { get; set; }
+
+	/// <summary>
 	/// How many samples per second?
 	/// </summary>
 	public int SampleRate { get; private init; }
@@ -180,9 +195,19 @@ public partial class SoundHandle : IValid, IDisposable
 	internal RealTimeUntil TimeUntilFaded { get; set; }
 
 	/// <summary>
+	/// Time remaining until the fade-in completes
+	/// </summary>
+	internal RealTimeUntil TimeUntilFadedIn { get; set; }
+
+	/// <summary>
 	/// Have we started fading out?
 	/// </summary>
-	internal bool IsFading { get; set; }
+	internal bool IsFadingOut { get; set; }
+
+	/// <summary>
+	/// Are we currently fading in?
+	/// </summary>
+	internal bool IsFadingIn { get; set; }
 
 	/// <summary>
 	/// True if the sound has been stopped
@@ -222,12 +247,12 @@ public partial class SoundHandle : IValid, IDisposable
 
 	public void Stop( float fadeTime = 0.0f )
 	{
-		if ( Finished || IsFading ) return;
+		if ( Finished || IsFadingOut ) return;
 
 		if ( fadeTime > 0.0f )
 		{
 			TimeUntilFaded = fadeTime;
-			IsFading = true;
+			IsFadingOut = true;
 
 			return;
 		}
@@ -253,13 +278,30 @@ public partial class SoundHandle : IValid, IDisposable
 
 	bool _destroyed = false;
 
-	internal readonly Scene Scene;
+	/// <summary>
+	/// Weak reference to the scene, so we don't prevent GC of the scene
+	/// when sound handles are held in static queues.
+	/// </summary>
+	private readonly WeakReference<Scene> _sceneRef;
+
+	/// <summary>
+	/// Scene this sound belongs to. May return null if the scene has been collected.
+	/// </summary>
+	internal Scene Scene => _sceneRef is not null && _sceneRef.TryGetTarget( out var scene ) ? scene : null;
 
 	internal SoundHandle( CSfxTable soundHandle )
 	{
 		_sfx = soundHandle;
-		Scene = Game.ActiveScene;
-		SampleRate = _sfx.GetSound().m_rate();
+		_sceneRef = new WeakReference<Scene>( Game.ActiveScene );
+
+		// GetSound() returns a CStrongHandle copy that increments the
+		// native refcount. We must destroy it after reading the sample
+		// rate, otherwise the VSound_t struct falls off the stack and
+		// the native handle is never released.
+		var tempSound = _sfx.GetSound();
+		SampleRate = tempSound.m_rate();
+		tempSound.DestroyStrongHandle();
+
 		TryCreateMixer();
 		addQueue.Enqueue( this );
 		_CreatedTime = RealTime.Now;
@@ -299,6 +341,28 @@ public partial class SoundHandle : IValid, IDisposable
 		return TargetMixer.Name == mixer.Name;
 	}
 
+	/// <summary>
+	/// Gets the effective mixer this sound will play on.
+	/// Returns the TargetMixer if set, otherwise the default mixer.
+	/// </summary>
+	internal Mixer GetEffectiveMixer()
+	{
+		if ( _destroyed ) return null;
+		return TargetMixer ?? Mixer.Default;
+	}
+
+	/// <summary>
+	/// Returns true if this sound is ready to be mixed (has sampler, not finished, valid).
+	/// Used by both mixer and occlusion system to determine if sound should be processed.
+	/// </summary>
+	internal bool CanBeMixed()
+	{
+		if ( !IsValid ) return false;
+		if ( sampler is null ) return false;
+		if ( Finished ) return false;
+		return true;
+	}
+
 	public bool IsValid => !_destroyed;
 
 	void TryCreateMixer()
@@ -335,7 +399,7 @@ public partial class SoundHandle : IValid, IDisposable
 
 			DisposeSources();
 
-			MainThread.QueueDispose( sampler );
+			Audio.MixingThread.QueueSamplerDisposal( sampler );
 			sampler = null;
 
 			removalQueue.Enqueue( this );
@@ -361,7 +425,13 @@ public partial class SoundHandle : IValid, IDisposable
 
 		UpdateFollower();
 		TryCreateMixer();
-		UpdateSources();
+
+		// Pairs with lock(voice) in MixVoices, prevents UpdateSources disposing
+		// _audioSource/_audioSources while the audio thread is inside GetSource/ApplyDirectMix.
+		lock ( this )
+		{
+			UpdateSources();
+		}
 
 		_ticks++;
 	}
@@ -436,11 +506,20 @@ public partial class SoundHandle : IValid, IDisposable
 	{
 		lock ( active )
 		{
+			// Drain pending additions first — handles created after the
+			// last TickAll() (e.g. UI button sounds on the exit click)
+			// would otherwise never enter `active` and never get disposed.
+			TickQueues();
+
 			foreach ( var handle in active )
 			{
 				if ( !handle.IsValid() ) continue;
 				handle.Dispose();
 			}
+
+			// No more TickQueues() will run after shutdown, so clear
+			// the set directly instead of relying on removalQueue.
+			active.Clear();
 		}
 	}
 

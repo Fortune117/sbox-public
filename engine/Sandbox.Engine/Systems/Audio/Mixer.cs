@@ -52,6 +52,9 @@ public partial class Mixer
 	/// </summary>
 	int _voiceCount;
 
+	/// Reused working list to avoid per-frame LINQ allocations.
+	readonly List<SoundHandle> _sortedVoices = new();
+
 	/// <summary>
 	/// Final mixed output buffer containing audio from all listeners.
 	/// </summary>
@@ -241,9 +244,7 @@ public partial class Mixer
 
 	bool ShouldPlay( SoundHandle voice )
 	{
-		if ( !voice.IsValid ) return false;
-		if ( voice.sampler is null ) return false;
-		if ( voice.Finished ) return false;
+		if ( !voice.CanBeMixed() ) return false;
 		if ( !voice.IsTargettingMixer( this ) ) return false;
 
 		return true;
@@ -254,23 +255,30 @@ public partial class Mixer
 	/// </summary>
 	internal void MixVoices( List<SoundHandle> voices )
 	{
-		// loop all playing sounds, mix them into buffer
-		// Can't do this in a thread because stream audio hrtf can't handle that
-		//	System.Threading.Tasks.Parallel.ForEach( voices.Where( ShouldPlay ).Take( _maxVoices ), voice =>
-		foreach ( var voice in voices.Where( ShouldPlay ).OrderByDescending( x => x._CreatedTime ).Take( _maxVoices ) )
+		// Filter into reusable list and sort newest-first, avoiding LINQ allocations.
+		_sortedVoices.Clear();
+		foreach ( var voice in voices )
 		{
+			if ( ShouldPlay( voice ) ) _sortedVoices.Add( voice );
+		}
+
+		_sortedVoices.Sort( SoundHandle.ByCreatedTimeDescending );
+
+		// Can't do this in a thread because stream audio hrtf can't handle that
+		var limit = Math.Min( _sortedVoices.Count, _maxVoices );
+		for ( var i = 0; i < limit; i++ )
+		{
+			var voice = _sortedVoices[i];
 			lock ( voice )
 			{
-				// While yeah this is checked, we could have a race condition where sampler
-				// has become null while we were ordering and taking!
-				if ( !ShouldPlay( voice ) )
-					return;
+				// Race condition: sampler may have become null since we filtered
+				if ( !ShouldPlay( voice ) ) continue;
 
 				MixVoice( voice );
 
 				Interlocked.Add( ref _voiceCount, 1 );
 			}
-		}// );
+		}
 	}
 
 	private bool ShouldMixVoices()
@@ -348,9 +356,19 @@ public partial class Mixer
 		using var _ = _mixVoice.Start();
 		var volume = voice.Volume;
 
-		if ( voice.IsFading )
+		if ( voice.IsFadingOut )
 		{
 			volume *= voice.Fadeout.EvaluateDelta( (float)voice.TimeUntilFaded.Fraction );
+		}
+
+		if ( voice.IsFadingIn )
+		{
+			volume *= voice.Fadein.EvaluateDelta( (float)voice.TimeUntilFadedIn.Fraction );
+
+			if ( voice.TimeUntilFadedIn )
+			{
+				voice.IsFadingIn = false;
+			}
 		}
 
 		var samples = voice.sampler.GetLastReadSamples();
@@ -471,7 +489,10 @@ public partial class Mixer
 				pos += new Vector3( 1, 0, 0 );
 			}
 
-			source.ApplyBinauralMix( pos, 0.1f * Spacializing, _input, inputoutput );
+			var spacial = 0.1f * Spacializing;
+
+			// 2D sounds use very low spatialization, nearest neighbor is sufficient
+			source.ApplyBinauralMix( pos, spacial, useNearestInterpolation: true, _input, inputoutput );
 			return;
 		}
 		else
@@ -500,7 +521,13 @@ public partial class Mixer
 				}
 			}
 
-			source.ApplyBinauralMix( soundDirectionLocal, spacial, _input, inputoutput );
+			// Determine HRTF interpolation mode:
+			// - Voice/speech sounds don't benefit from bilinear interpolation
+			// - Player's own voice (loopback) uses nearest
+			// - Low spatial blend means minimal HRTF effect, nearest is sufficient
+			bool useNearest = voice.IsVoice || voice.Loopback || spacial < 0.5f;
+
+			source.ApplyBinauralMix( soundDirectionLocal, spacial, useNearest, _input, inputoutput );
 		}
 	}
 

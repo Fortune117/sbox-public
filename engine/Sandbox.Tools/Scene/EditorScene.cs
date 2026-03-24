@@ -10,7 +10,11 @@ public static class EditorScene
 	/// <summary>
 	/// Should the game start in play mode when hitting play, instead of playing the active scene.
 	/// </summary>
-	public static bool PlayMode { get; set; } = false;
+	public static bool PlayMode
+	{
+		get => ProjectCookie?.Get( "editor.playmode", false ) ?? false;
+		set => ProjectCookie?.Set( "editor.playmode", value );
+	}
 
 	public static Gizmo.SceneSettings GizmoSettings { get; private set; } = new Gizmo.SceneSettings();
 
@@ -449,7 +453,7 @@ public static class EditorScene
 		using ( SceneEditorSession.Active.UndoScope( "Select All" ).Push() )
 		{
 			Selection.Clear();
-			foreach ( var child in SceneEditorSession.Active.Scene.Children )
+			foreach ( var child in SceneEditorSession.Active.Scene.Children.Where( x => x.ShouldShowInHierarchy() ) )
 			{
 				Selection.Add( child );
 			}
@@ -480,33 +484,39 @@ public static class EditorScene
 	[Shortcut( "editor.paste", "CTRL+V" )]
 	public static void Paste()
 	{
-		var selected = EditorScene.Selection.FirstOrDefault() as GameObject;
+		PasteInternal();
+	}
 
-		var session = SceneEditorSession.Resolve( selected );
+	public static void PasteAt( SceneTraceResult tr )
+	{
+		PasteInternal( tr );
+	}
+
+	static void PasteInternal( SceneTraceResult? tr = default )
+	{
+		var selected = Selection.FirstOrDefault() as GameObject;
+
+		var session = SceneEditorSession.Resolve( selected ) ?? SceneEditorSession.Active;
 		using var scene = session.Scene.Push();
 
 		// Paste to scene root if nobody is selected
-		if ( selected is null )
-		{
-			selected = SceneEditorSession.Active.Scene;
-		}
+		selected ??= SceneEditorSession.Active.Scene;
 
 		if ( selected is Scene )
 		{
-			PasteAsChild();
+			PasteAsChildAt( tr );
 			return;
 		}
 
-		ExecutableUndoablePaste( selected, false );
+		ExecutableUndoablePaste( selected, false, tr );
 	}
 
-	[Shortcut( "editor.paste-as-child", "CTRL+SHIFT+V" )]
-	public static void PasteAsChild()
+	static void PasteAsChildAt( SceneTraceResult? tr = default )
 	{
 		var selected = Selection.OfType<GameObject>().ToArray();
 		var first = selected.FirstOrDefault();
 
-		var session = SceneEditorSession.Resolve( first );
+		var session = SceneEditorSession.Resolve( first ) ?? SceneEditorSession.Active;
 		using var scene = session.Scene.Push();
 
 		// Paste to scene root if nobody is selected
@@ -515,15 +525,21 @@ public static class EditorScene
 			selected = [SceneEditorSession.Active.Scene];
 		}
 
-		ExecutableUndoablePaste( selected, true );
+		ExecutableUndoablePaste( selected, true, tr );
 	}
 
-	private static void ExecutableUndoablePaste( GameObject target, bool asChild )
+	[Shortcut( "editor.paste-as-child", "CTRL+SHIFT+V" )]
+	public static void PasteAsChild()
 	{
-		ExecutableUndoablePaste( [target], asChild );
+		PasteAsChildAt();
 	}
 
-	private static void ExecutableUndoablePaste( IEnumerable<GameObject> targets, bool asChild )
+	private static void ExecutableUndoablePaste( GameObject target, bool asChild, SceneTraceResult? tr )
+	{
+		ExecutableUndoablePaste( [target], asChild, tr );
+	}
+
+	private static void ExecutableUndoablePaste( IEnumerable<GameObject> targets, bool asChild, SceneTraceResult? tr )
 	{
 		var text = EditorUtility.Clipboard.Paste();
 
@@ -539,7 +555,7 @@ public static class EditorScene
 				using var scene = session.Scene.Push();
 				using ( session.UndoScope( $"Paste {objCount} Objects" ).WithGameObjectCreations().Push() )
 				{
-					EditorScene.Selection.Clear();
+					Selection.Clear();
 
 					foreach ( var target in targets )
 					{
@@ -564,8 +580,13 @@ public static class EditorScene
 
 							go.MakeNameUnique();
 
-							EditorScene.Selection.Add( go );
+							Selection.Add( go );
 						}
+					}
+
+					if ( tr is { } trace )
+					{
+						PlaceBoundsOnSurface( Selection.OfType<GameObject>(), trace.HitPosition, trace.Normal );
 					}
 				}
 			}
@@ -573,6 +594,30 @@ public static class EditorScene
 		catch
 		{
 			Log.Warning( "Failed to paste, invalid JSON." );
+		}
+	}
+
+	/// <summary>
+	/// Helper function to offset gameobjects to surface bounds.
+	/// </summary>
+	public static void PlaceBoundsOnSurface( IEnumerable<GameObject> gos, Vector3 position, Vector3 normal )
+	{
+		var selectionBounds = BBox.FromBoxes( gos.Select( x => x.GetBounds() ) );
+		var selectionCenter = selectionBounds.Center;
+		var maxDot = float.NegativeInfinity;
+
+		foreach ( var corner in selectionBounds.Corners )
+		{
+			var d = Vector3.Dot( corner - selectionCenter, normal );
+			if ( d > maxDot ) maxDot = d;
+		}
+
+		var pastePos = position + normal * maxDot;
+		var offset = pastePos - selectionCenter;
+
+		foreach ( var o in gos )
+		{
+			o.WorldPosition += offset;
 		}
 	}
 

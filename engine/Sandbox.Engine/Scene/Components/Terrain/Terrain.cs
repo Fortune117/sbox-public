@@ -23,6 +23,16 @@ public sealed partial class Terrain : Collider, Component.ExecuteInEditor
 
 	protected override void OnDisabled()
 	{
+		DestroyInternal();
+	}
+
+	protected override void OnDestroy()
+	{
+		DestroyInternal();
+	}
+
+	void DestroyInternal()
+	{
 		Transform.OnTransformChanged -= OnTerrainChanged;
 		Storage?.MaterialSettings?.OnChanged -= OnTerrainChanged;
 
@@ -31,6 +41,20 @@ public sealed partial class Terrain : Collider, Component.ExecuteInEditor
 
 		HeightMap?.Dispose();
 		ControlMap?.Dispose();
+
+		HeightMap = null;
+		ControlMap = null;
+
+		TerrainBuffer?.Dispose();
+		TerrainBuffer = null;
+
+		MaterialsBuffer?.Dispose();
+		MaterialsBuffer = null;
+
+		if ( !Scene.GetAllComponents<Terrain>().Any( t => t != this && t.Active ) )
+		{
+			Scene.RenderAttributes.Set( "TerrainCount", 0 );
+		}
 	}
 
 	void OnTerrainChanged()
@@ -80,6 +104,9 @@ public sealed partial class Terrain : Collider, Component.ExecuteInEditor
 
 		HeightMap?.Dispose();
 		ControlMap?.Dispose();
+
+		HeightMap = null;
+		ControlMap = null;
 
 		if ( Storage is null )
 			return;

@@ -277,9 +277,9 @@ class Decals
 		return false;
 	}
 
-	static void Apply( float3 worldPos, float2 screenPos, in out Material material )
+	static void Apply( float3 worldPos, in out Material material )
 	{
-		ClusterRange range = Cluster::Query( ClusterItemType_Decal, worldPos );
+		ClusterRange range = Cluster::Query( ClusterItemType_Decal, material.ScreenPosition );
 		if ( range.Count == 0 )
 		{
 			return;

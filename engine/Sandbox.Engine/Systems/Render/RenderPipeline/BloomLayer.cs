@@ -44,7 +44,8 @@ internal class BloomDownsampleLayer : ProceduralRenderLayer
 }
 internal class QuarterDepthDownsampleLayer : ProceduralRenderLayer
 {
-	private Material DepthResolve;
+	private static Material DepthResolve = Material.FromShader( "shaders/depthresolve.shader" );
+
 	private bool MSAAInput;
 
 	public QuarterDepthDownsampleLayer()
@@ -53,7 +54,6 @@ internal class QuarterDepthDownsampleLayer : ProceduralRenderLayer
 		Flags |= LayerFlags.NeverRemove | LayerFlags.DoesntModifyColorBuffers;
 		ClearFlags = ClearFlags.Depth | ClearFlags.Stencil;
 		LayerType = SceneLayerType.Opaque;
-		DepthResolve = Material.Create( "depthresolve", "shaders/depthresolve.shader" );
 	}
 
 	public void Setup( ISceneView view, RenderViewport viewport, SceneViewRenderTargetHandle rtDepth, bool msaaInput, RenderTarget rtOutDepth )

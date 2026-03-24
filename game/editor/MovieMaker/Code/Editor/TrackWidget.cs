@@ -1,11 +1,13 @@
 ﻿using Editor.NodeEditor;
 using Sandbox.MovieMaker;
+using Sandbox.MovieMaker.Compiled;
 using Sandbox.MovieMaker.Properties;
 using Sandbox.UI;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
+using static Sandbox.Resources.ResourceCompileContext;
 
 namespace Editor.MovieMaker;
 
@@ -163,7 +165,10 @@ public partial class TrackWidget : Widget
 	{
 		base.OnMousePress( e );
 
-		e.Accepted = true;
+		if ( !e.MiddleMouseButton )
+		{
+			e.Accepted = true;
+		}
 	}
 
 	protected override void OnMouseClick( MouseEvent e )
@@ -318,7 +323,7 @@ public partial class TrackWidget : Widget
 		_menu.OpenAtCursor();
 	}
 
-	private static void AddCommonContextMenuOptions( Menu menu, IReadOnlyList<TrackView> trackViews )
+	private void AddCommonContextMenuOptions( Menu menu, IReadOnlyList<TrackView> trackViews )
 	{
 		var anyLocked = trackViews.Any( x => x.IsLockedSelf );
 		var anyUnlocked = trackViews.Any( x => !x.IsLockedSelf );
@@ -345,6 +350,41 @@ public partial class TrackWidget : Widget
 			} );
 		}
 
+		var anyExpanded = trackViews.Any( x => x is { IsExpanded: true, Children.Count: > 0 } );
+		var anyCollapsed = trackViews.Any( x => x is { IsExpanded: false, Children.Count: > 0 } );
+
+		if ( anyCollapsed )
+		{
+			menu.AddOption( "Expand", "add", () =>
+			{
+				foreach ( var track in trackViews )
+				{
+					if ( track is { IsExpanded: false, Children.Count: > 0 } )
+					{
+						track.IsExpanded = true;
+					}
+				}
+
+				View.TrackList.Update();
+			} );
+		}
+
+		if ( anyExpanded )
+		{
+			menu.AddOption( "Collapse", "remove", () =>
+			{
+				foreach ( var track in trackViews )
+				{
+					if ( track is { IsExpanded: true, Children.Count: > 0 } )
+					{
+						track.IsExpanded = false;
+					}
+				}
+
+				View.TrackList.Update();
+			} );
+		}
+
 		menu.AddOption( "Remove", "delete", () =>
 		{
 			foreach ( var track in trackViews )
@@ -352,6 +392,55 @@ public partial class TrackWidget : Widget
 				track.Remove();
 			}
 		} );
+
+		var player = TrackList.Session.Player;
+		var binder = TrackList.Session.Binder;
+		var refTracks = GetUniqueReferenceTracks( trackViews );
+
+		if ( refTracks.Any( x => !binder.Get( x ).IsBound ) )
+		{
+			menu.AddOption( "Create Missing Targets", "person_add", () => player.UpdateTargets() );
+		}
+	}
+
+	/// <summary>
+	/// Gets all reference tracks, including descendants, of the given <paramref name="trackViews"/>.
+	/// </summary>
+	private IReadOnlyList<IReferenceTrack> GetUniqueReferenceTracks( IEnumerable<TrackView> trackViews )
+	{
+		var queue = new Queue<TrackView>( trackViews );
+		var touched = new HashSet<IReferenceTrack>();
+		var list = new List<IReferenceTrack>();
+
+		while ( queue.TryDequeue( out var trackView ) )
+		{
+			switch ( trackView.Track )
+			{
+				case ProjectSequenceTrack sequenceTrack:
+					foreach ( var refTrack in sequenceTrack.ReferenceTracks )
+					{
+						if ( touched.Add( refTrack ) )
+						{
+							list.Add( refTrack );
+						}
+					}
+					break;
+
+				case IProjectReferenceTrack refTrack:
+					if ( touched.Add( refTrack ) )
+					{
+						list.Add( refTrack );
+					}
+					break;
+			}
+
+			foreach ( var child in trackView.Children )
+			{
+				queue.Enqueue( child );
+			}
+		}
+
+		return list;
 	}
 
 	private bool? GetAggregateLockState( IEnumerable<TrackView> trackViews )
@@ -884,6 +973,7 @@ file sealed class CollapseButton : Button
 	protected override void OnClicked()
 	{
 		Track.View.IsExpanded = !Track.View.IsExpanded;
+		Track.View.TrackList.Update();
 	}
 }
 
@@ -895,11 +985,16 @@ file sealed class ReflectionHelper<T>
 		return ControlWidget.Create( EditorTypeLibrary.CreateProperty( target.Name,
 			() => target.Value, value =>
 			{
-				track.ReferenceId = value switch
+				var metadata = track.Metadata ?? new TrackMetadata();
+
+				track.Metadata = metadata with
 				{
-					Component cmp => cmp.Id,
-					GameObject go => go.Id,
-					_ => null
+					ReferenceId = value switch
+					{
+						Component cmp => cmp.Id,
+						GameObject go => go.Id,
+						_ => null
+					}
 				};
 
 				target.Bind( value );

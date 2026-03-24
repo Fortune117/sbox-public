@@ -78,6 +78,15 @@ public sealed partial class SoundStream : IHandle, IDisposable
 		}
 	}
 
+	/// <summary>
+	/// Close the stream: signals that no more data will be written.
+	/// Once the internal buffer drains, <see cref="SoundHandle.IsPlaying"/> will become <c>false</c>.
+	/// </summary>
+	public void Close()
+	{
+		if ( native.IsValid ) native.Close();
+	}
+
 	public void Dispose()
 	{
 		if ( native.IsValid )
@@ -99,7 +108,7 @@ public sealed partial class SoundStream : IHandle, IDisposable
 		if ( table.IsNull )
 			return default;
 
-		return Sound.PlayFile( table, volume, pitch, 0, "Sound Stream" );
+		return Sound.PlayFile( table, volume, pitch, 0, 0.0f, "Sound Stream" );
 	}
 
 	/// <summary>

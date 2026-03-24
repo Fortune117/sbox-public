@@ -1,12 +1,14 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 
 namespace Generator
 {
-
 	[TestClass]
 	public class CodeGen
 	{
@@ -72,14 +74,16 @@ namespace Generator
 			return compiler;
 		}
 
-		CSharpCompilation BuildString( string contents, string assemblyName = "assembly_name" )
+		const string InputSyntaxTreePath = "Program.cs";
+
+		CSharpCompilation BuildString( string contents, string assemblyName = "assembly_name", bool asSourceGenerator = false, Action<Sandbox.Generator.Processor> configureProcessor = null, IEnumerable<MetadataReference> additionalReferences = null )
 		{
 			List<SyntaxTree> SyntaxTree = new List<SyntaxTree>();
 
 			{
 				var parseOptions = CSharpParseOptions.Default.WithLanguageVersion( LanguageVersion.Default );
 				var code = contents;
-				var tree = CSharpSyntaxTree.ParseText( text: code, options: parseOptions, path: "Program.cs", encoding: System.Text.Encoding.UTF8 );
+				var tree = CSharpSyntaxTree.ParseText( text: code, options: parseOptions, path: InputSyntaxTreePath, encoding: System.Text.Encoding.UTF8 );
 				SyntaxTree.Add( tree );
 			}
 
@@ -98,12 +102,21 @@ namespace Generator
 
 			refs.Add( MetadataReference.CreateFromFile( typeof( Networking ).Assembly.Location ) );
 			refs.Add( MetadataReference.CreateFromFile( typeof( ConCmdAttribute ).Assembly.Location ) ); // Sandbox.System
+			if ( additionalReferences is not null )
+			{
+				refs.AddRange( additionalReferences );
+			}
 
 			CSharpCompilation compiler = CSharpCompilation.Create( $"{assemblyName}.dll", SyntaxTree, refs, optn );
 
 			var processor = new Sandbox.Generator.Processor();
 			processor.AddonName = assemblyName;
 			processor.PackageAssetResolver = ( p ) => $"/{p}/model_mock.mdl";
+			configureProcessor?.Invoke( processor );
+			if ( asSourceGenerator )
+			{
+				processor.Context = new SourceProductionContext?( default );
+			}
 			processor.Run( compiler );
 
 			compiler = processor.Compilation;
@@ -223,13 +236,13 @@ namespace Generator
 
 			System.Console.WriteLine( tree.GetText().ToString() );
 
-			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = null, MethodIdentity = -1168963981, MethodName = \"TestWrappedStaticCall\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap static method call" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = null !, MethodIdentity = -1168963981, MethodName = \"TestWrappedStaticCall\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap static method call" );
 			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = this, MethodIdentity = -446800946, MethodName = \"TestWrappedInstanceCall\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap instance method call" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = null, MethodIdentity = 1638661065, MethodName = \"TestWrappedStaticCallNoArg\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap static method call with no arg" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = null !, MethodIdentity = 1638661065, MethodName = \"TestWrappedStaticCallNoArg\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap static method call with no arg" );
 			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = this, MethodIdentity = -1769572979, MethodName = \"TestWrappedInstanceCallNoArg\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap instance method call with no arg" );
 			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = this, MethodIdentity = 1201362747, MethodName = \"ExpressionBodiedBroadcast\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap expression bodied method" );
 			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = this, MethodIdentity = -1316352073, MethodName = \"TestWrappedInstanceCallReturnType\", TypeName = \"TestWrapCall\"" ), "Generated code should wrap instance method call with return type" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = null, MethodIdentity = 1168636003, MethodName = \"TestAsyncTaskCall\", TypeName = \"TestWrapCall\", IsStatic = true" ), "Generated code should wrap async Task method call" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "Object = null !, MethodIdentity = 1168636003, MethodName = \"TestAsyncTaskCall\", TypeName = \"TestWrapCall\", IsStatic = true" ), "Generated code should wrap async Task method call" );
 			Assert.IsTrue( tree.GetText().ToString().Contains( "MethodName = \"MyGenericCall\", TypeName = \"TestWrapCall\", IsStatic = false, Attributes = __898531504__Attrs, GenericArguments = new[] { typeof(T) } }" ), "Generated code should include closed generic types" );
 			Assert.IsTrue( tree.GetText().ToString().Contains( "MethodName = \"MyGenericCallAsync\", TypeName = \"TestWrapCall\", IsStatic = false, Attributes = __1383690312__Attrs, GenericArguments = new[] { typeof(T) } }" ), "Generated code should include closed generic types when returning a Task" );
 		}
@@ -259,10 +272,9 @@ namespace Generator
 			var tree = compiler.SyntaxTrees.First();
 			System.Console.WriteLine( tree.GetText().ToString() );
 
-			Assert.IsTrue( tree.GetText().ToString().Contains( "return (bool)WrapGet.OnWrapGetStatic(new global::Sandbox.WrappedPropertyGet<bool> { Value = _repback__StaticProperty" ), "Generated code should wrap static property get accessor" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "return (bool)OnWrapGet(new global::Sandbox.WrappedPropertyGet<bool> { Value = _repback__InstanceProperty" ), "Generated code should wrap instance property get accessor" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "_repback__InstanceProperty= true;" ), "Generated code should copy initializer" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "return _repback__FieldKeywordProperty;" ), "Field keyword is replaced in getter with backing field name" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "return (bool)WrapGet.OnWrapGetStatic(new global::Sandbox.WrappedPropertyGet<bool> { Value = (__StaticProperty_WrapGet__CachedGetter" ), "Generated code should wrap static property get accessor" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "return (bool)OnWrapGet(new global::Sandbox.WrappedPropertyGet<bool> { Value = (__InstanceProperty_WrapGet" ), "Generated code should wrap instance property get accessor" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "return (bool)OnWrapGet(new global::Sandbox.WrappedPropertyGet<bool> { Value = (__ComplexGetter_WrapGet__CachedGetter" ), "Generated code should wrap complex getter with inline lambda" );
 		}
 
 		[TestMethod]
@@ -272,11 +284,8 @@ namespace Generator
 			var tree = compiler.SyntaxTrees.First();
 			System.Console.WriteLine( tree.GetText().ToString() );
 
-			Assert.IsTrue( tree.GetText().ToString().Contains( "WrapSet.OnWrapSetStatic(new global::Sandbox.WrappedPropertySet<bool> { Value = value, Object = null, Setter = (v) =>" ), "Generated code should wrap static property set accessor" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "OnWrapSet(new global::Sandbox.WrappedPropertySet<bool> { Value = value, Object = this, Setter = (v) =>" ), "Generated code should wrap instance property set accessor" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "_repback__FieldKeywordProperty = value;" ), "Field keyword is replaced in setter with backing field name" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "get => _repback__FieldKeywordPropertyAuto" ), "Field keyword is replaced in auto-getter with backing field name" );
-			Assert.IsTrue( tree.GetText().ToString().Contains( "_repback__FieldKeywordPropertyAuto = value" ), "Field keyword is replaced in setter with auto-getter" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "WrapSet.OnWrapSetStatic(new global::Sandbox.WrappedPropertySet<bool> { Value = value!, Object = null !, Setter = __StaticProperty_WrapSet__CachedSetter" ), "Generated code should wrap static property set accessor" );
+			Assert.IsTrue( tree.GetText().ToString().Contains( "OnWrapSet(new global::Sandbox.WrappedPropertySet<bool> { Value = value!, Object = this, Setter = __InstanceProperty_WrapSet__CachedSetter" ), "Generated code should wrap instance property set accessor" );
 		}
 
 		[TestMethod]
@@ -351,6 +360,55 @@ namespace Generator
 			var tree = compiler.SyntaxTrees.First();
 
 			Assert.IsTrue( tree.GetText().ToString().Contains( "[return:DescriptionAttribute( \"Here's a description of the return value!\" )]" ) );
+		}
+
+		[TestMethod]
+		public void ArrayPoolSharedIsRedirectedForAddons()
+		{
+			var rewritten = RunArrayPoolRewrite( asSourceGenerator: false );
+
+			Assert.IsTrue( rewritten.Contains( "global::Sandbox.Internal.PublicArrayPool<int>.Shared" ), "Expected ArrayPool.Shared to be redirected to PublicArrayPool.Shared" );
+			Assert.IsFalse( rewritten.Contains( "return ArrayPool<int>.Shared" ), "Redirected code should not retain direct ArrayPool.Shared access" );
+		}
+
+		[TestMethod]
+		public void ArrayPoolSharedUnaffectedForEngineGenerators()
+		{
+			var rewritten = RunArrayPoolRewrite( asSourceGenerator: true );
+
+			Assert.IsTrue( rewritten.Contains( "return ArrayPool<int>.Shared" ), "Engine compilation should keep ArrayPool.Shared untouched" );
+			Assert.IsFalse( rewritten.Contains( "global::Sandbox.Internal.PublicArrayPool<int>.Shared" ), "Engine compilation should not inject PublicArrayPool helper" );
+		}
+
+		private string RunArrayPoolRewrite( bool asSourceGenerator )
+		{
+			const string Source = """
+	using System.Buffers;
+
+	public static class ArrayPoolConsumer
+	{
+		public static int[] Acquire()
+		{
+			return ArrayPool<int>.Shared.Rent(1);
+		}
+	}
+	""";
+
+			var additionalReferences = new[]
+			{
+				MetadataReference.CreateFromFile( typeof( ArrayPool<int> ).Assembly.Location )
+			};
+
+			var compiler = BuildString(
+				Source,
+				assemblyName: "array_pool_test",
+				asSourceGenerator: asSourceGenerator,
+				configureProcessor: processor => processor.EnableCorelibPolyfills = !asSourceGenerator,
+				additionalReferences: additionalReferences );
+
+			// BuildString hardcodes this path via CSharpSyntaxTree.ParseText(..., path: InputSyntaxTreePath)
+			var processedTree = compiler.SyntaxTrees.First( x => x.FilePath == InputSyntaxTreePath );
+			return processedTree.GetText().ToString();
 		}
 	}
 }

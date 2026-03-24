@@ -10,7 +10,20 @@ namespace Editor.MeshEditor;
 [Alias( "mesh" )]
 public partial class MeshTool : EditorTool
 {
-	public Material ActiveMaterial { get; set; } = Material.Load( "materials/dev/reflectivity_30.vmat" );
+	private Material _activeMaterial;
+
+	public Material ActiveMaterial
+	{
+		get => _activeMaterial;
+		set
+		{
+			if ( _activeMaterial != value )
+			{
+				_activeMaterial = value;
+				SaveActiveMaterial();
+			}
+		}
+	}
 
 	public MoveMode MoveMode { get; set; }
 
@@ -23,11 +36,13 @@ public partial class MeshTool : EditorTool
 	public override IEnumerable<EditorTool> GetSubtools()
 	{
 		yield return new PrimitiveTool( this );
-		yield return new MeshSelection( this );
+		yield return new ObjectSelection( this );
 		yield return new VertexTool( this );
 		yield return new EdgeTool( this );
 		yield return new FaceTool( this );
 		yield return new TextureTool( this );
+		yield return new VertexPaintTool( this );
+		yield return new DisplacementTool( this );
 	}
 
 	public override void OnEnabled()
@@ -40,6 +55,14 @@ public partial class MeshTool : EditorTool
 		Selection.Clear();
 
 		SetMoveMode<PositionMode>();
+
+		LoadActiveMaterial();
+		LoadToolbarCookies();
+	}
+
+	public override void OnUpdate()
+	{
+		AllowGameObjectSelection = CurrentTool?.GetType() == typeof( ObjectSelection );
 	}
 
 	public override void OnSelectionChanged()
@@ -50,6 +73,35 @@ public partial class MeshTool : EditorTool
 	[Shortcut( "tools.mesh-tool", "m", typeof( SceneViewWidget ) )]
 	public static void ActivateTool()
 	{
+		if ( EditorToolManager.CurrentModeName == nameof( MeshTool ) )
+			return;
+
 		EditorToolManager.SetTool( nameof( MeshTool ) );
+		EditorToolManager.SetSubTool( nameof( ObjectSelection ) );
+	}
+
+	private void SaveActiveMaterial()
+	{
+		if ( _activeMaterial != null && _activeMaterial.IsValid() )
+		{
+			ProjectCookie.Set( "MeshTool.ActiveMaterial", _activeMaterial.ResourcePath );
+		}
+	}
+
+	private void LoadActiveMaterial()
+	{
+		var savedPath = ProjectCookie.Get( "MeshTool.ActiveMaterial", string.Empty );
+
+		if ( !string.IsNullOrEmpty( savedPath ) )
+		{
+			var material = Material.Load( savedPath );
+			if ( material != null && material.IsValid() )
+			{
+				_activeMaterial = material;
+				return;
+			}
+		}
+
+		_activeMaterial = Material.Load( "materials/dev/reflectivity_30.vmat" );
 	}
 }

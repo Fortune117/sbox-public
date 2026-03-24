@@ -406,7 +406,6 @@ public partial class AssetBrowser : Widget, IBrowser, AssetSystem.IEventListener
 		List<object> items = new List<object>();
 		var tagCounts = new Dictionary<string, int>();
 
-		AssetList.Clear();
 
 		await Task.Run( () =>
 		{
@@ -497,10 +496,7 @@ public partial class AssetBrowser : Widget, IBrowser, AssetSystem.IEventListener
 			return false;
 
 		AssetList.SetItems( items );
-		if ( !string.IsNullOrEmpty( lastSortColumn ) )
-		{
-			SortAssetList( lastSortColumn, lastSortAscending );
-		}
+		SortAssetList( lastSortColumn, lastSortAscending );
 
 		Chips.ClearButKeepActive();
 
@@ -518,79 +514,25 @@ public partial class AssetBrowser : Widget, IBrowser, AssetSystem.IEventListener
 
 	private void SortAssetList( string sortBy, bool ascending )
 	{
-		List<object> items;
+		var dirs = AssetList.Items.OfType<DirectoryEntry>();
+		var sortedDirs = ascending
+			? dirs.OrderBy( de => de.Name.ToLower() )
+			: dirs.OrderByDescending( de => de.Name.ToLower() );
 
-		switch ( sortBy )
+		Func<AssetEntry, IComparable> key = sortBy switch
 		{
-			case "Name":
-				items = AssetList.Items.OrderBy( x =>
-				{
-					string sort = "";
-					if ( x is AssetEntry ae )
-					{
-						sort = ae.Name.ToLower();
-					}
-					else if ( x is DirectoryEntry de )
-					{
-						// Directories always come first
-						sort = (ListHeader.SortAscending ? "! " : "z ") + de.Name.ToLower();
-					}
-					return sort;
-				} ).ToList();
-				break;
-			case "Date":
-				items = AssetList.Items.OrderBy( x =>
-				{
-					var date = DateTimeOffset.Now;
-					if ( x is AssetEntry ae )
-					{
-						date = ae.FileInfo?.LastWriteTime ?? date;
-					}
-					var sort = date.UtcTicks.ToString();
-					if ( x is DirectoryEntry de )
-					{
-						// Directories always come first
-						sort = (ListHeader.SortAscending ? "! " : "z ") + de.Name.ToLower();
-					}
-					return sort;
-				} ).ToList();
-				break;
-			case "Type":
-				items = AssetList.Items.OrderBy( x =>
-				{
-					var type = (x is AssetEntry ae) ? ae.TypeName : "";
-					var sort = type.ToLower();
-					if ( x is DirectoryEntry de )
-					{
-						// Directories always come first
-						sort = (ListHeader.SortAscending ? "! " : "z ") + de.Name.ToLower();
-					}
-					return sort;
-				} ).ToList();
-				break;
-			case "Size":
-				items = AssetList.Items.OrderBy( x =>
-				{
-					long size = (x is AssetEntry ae) ? (ae.FileInfo?.Length ?? 0) : 0;
-					if ( x is DirectoryEntry de )
-					{
-						// Directories always come first/last
-						size = -long.MaxValue + de.Name.ToLong();
-					}
-					return size;
-				} ).ToList();
-				break;
-			default:
-				items = AssetList.Items.ToList();
-				break;
-		}
+			"Date" => ae => ae.LastModified ?? DateTimeOffset.MinValue,
+			"Size" => ae => ae.Size ?? 0L,
+			"Type" => ae => ae.TypeName.ToLower(),
+			_ => ae => ae.Name.ToLower(),
+		};
 
-		if ( !ascending )
-		{
-			items.Reverse();
-		}
-		AssetList.SetItems( items );
+		var files = AssetList.Items.OfType<AssetEntry>();
+		var sortedFiles = ascending
+			? files.OrderBy( key ).ThenBy( ae => ae.Name.ToLower() )
+			: files.OrderByDescending( key ).ThenByDescending( ae => ae.Name.ToLower() );
 
+		AssetList.SetItems( sortedDirs.Cast<object>().Concat( sortedFiles ) );
 		lastSortColumn = sortBy;
 		lastSortAscending = ascending;
 	}
@@ -759,17 +701,16 @@ public partial class AssetBrowser : Widget, IBrowser, AssetSystem.IEventListener
 		if ( asset is null ) return;
 
 		var folder = System.IO.Path.GetDirectoryName( asset.AbsolutePath );
-
 		EditorWindow.DockManager.RaiseDock( this );
 
 		NavigateTo( folder );
 
 		// wait for the list to (successfully) populate before selecting the item
-		bool success = await RefreshTask;
+		var success = await RefreshTask;
 		if ( !success )
 			return;
 
-		AssetEntry entry = AssetList.Items.OfType<AssetEntry>().Where( x => x.Asset?.RelativePath == asset.RelativePath ).FirstOrDefault();
+		var entry = AssetList.Items.OfType<AssetEntry>().FirstOrDefault( x => x.Asset?.RelativePath == asset.RelativePath );
 		if ( entry is null )
 			return;
 
@@ -779,10 +720,9 @@ public partial class AssetBrowser : Widget, IBrowser, AssetSystem.IEventListener
 
 	public void OnAssetCreated( Asset asset, string path )
 	{
-		var entry = AssetList.AddItem( new AssetEntry( new FileInfo( path ), asset ) );
+		var entry = new AssetEntry( new FileInfo( path ), asset );
+		AssetList.AddItem( entry );
 		AssetList.SelectItem( entry, skipEvents: true );
-
-		AssetList.OpenRenameFlyout( entry );
 	}
 
 	void AssetSystem.IEventListener.OnAssetTagsChanged()

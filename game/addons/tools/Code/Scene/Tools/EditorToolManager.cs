@@ -14,6 +14,8 @@ public class EditorToolManager
 
 	public EditorTool CurrentTool { get; private set; }
 
+	public bool IsCurrentViewFocused { get; private set; }
+
 	public EditorTool CurrentSubTool => CurrentTool?.CurrentTool;
 	public List<EditorTool> ComponentTools { get; private set; } = new List<EditorTool>();
 
@@ -29,12 +31,14 @@ public class EditorToolManager
 
 	}
 
-	internal void Frame( CameraComponent camera, SceneEditorSession session )
+	internal void Frame( CameraComponent camera, SceneEditorSession session, bool isFocused )
 	{
 		CurrentSession = session;
 		UpdateTool( CurrentModeName );
 		UpdateSubTool( CurrentSubModeName );
 		UpdateSelection();
+
+		IsCurrentViewFocused = isFocused;
 
 		if ( CurrentTool is not null )
 		{
@@ -74,6 +78,8 @@ public class EditorToolManager
 		// So that we update the sub tool immediately after updating the parent tool
 		currentSubMode = null;
 
+		var pendingSubTool = CurrentSubModeName;
+
 		CurrentTool?.Dispose();
 		CurrentTool = null;
 
@@ -88,6 +94,9 @@ public class EditorToolManager
 
 		CurrentTool = bestType.Type.Create<EditorTool>();
 		CurrentTool.InitializeInternal( this );
+
+		if ( pendingSubTool is not null )
+			CurrentSubModeName = pendingSubTool;
 	}
 
 	private void UpdateSubTool( string editMode )
@@ -191,6 +200,10 @@ public class EditorToolManager
 	public void DisposeAll()
 	{
 		previousHash = -1;
+		currentMode = null;
+		currentSubMode = null;
+		CurrentTool?.Dispose();
+		CurrentTool = null;
 		foreach ( var tool in ComponentTools )
 			tool?.Dispose();
 		ComponentTools.Clear();

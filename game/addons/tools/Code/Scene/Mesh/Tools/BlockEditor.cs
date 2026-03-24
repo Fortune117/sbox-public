@@ -15,6 +15,9 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 	Vector3 _dragStartPos;
 	bool _dragStarted;
 	Model _previewModel;
+	bool _resizeDragging;
+	BBox _resizeBefore;
+	int _undoStartCount;
 
 	static float TextSize => 22 * Gizmo.Settings.GizmoScale * Application.DpiScale;
 
@@ -56,12 +59,14 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 	public override void OnCreated( MeshComponent component )
 	{
+		PopUndo();
+
 		var selection = SceneEditorSession.Active.Selection;
 		selection.Set( component.GameObject );
 
 		if ( !_dragStarted )
 		{
-			EditorToolManager.SetSubTool( nameof( MeshSelection ) );
+			EditorToolManager.SetSubTool( nameof( ObjectSelection ) );
 			Tool.MeshTool.SetMoveMode<ResizeMode>();
 		}
 
@@ -100,6 +105,7 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 			_box = null;
 			_dragStarted = true;
+			_undoStartCount = SceneEditorSession.Active.UndoSystem.Back.Count;
 		}
 		else
 		{
@@ -128,10 +134,14 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 				return;
 			}
 
+			var before = _box;
+
 			_box = new BBox( _dragStartPos, point + Vector3.Up * s_lastHeight );
 			_dragStarted = false;
 
 			BuildPreview();
+
+			PushUndo( "Create Preview Block", before, _box );
 		}
 		else
 		{
@@ -140,10 +150,25 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 			Gizmo.Draw.LineThickness = 2;
 			Gizmo.Draw.Color = Gizmo.Colors.Active.WithAlpha( 0.5f );
 			Gizmo.Draw.LineBBox( box );
-			Gizmo.Draw.Color = Gizmo.Colors.Left;
-			Gizmo.Draw.ScreenText( $"L: {box.Size.y:0.#}", box.Mins.WithY( box.Center.y ), Vector2.Up * 32, size: TextSize );
-			Gizmo.Draw.Color = Gizmo.Colors.Forward;
-			Gizmo.Draw.ScreenText( $"W: {box.Size.x:0.#}", box.Mins.WithX( box.Center.x ), Vector2.Up * 32, size: TextSize );
+
+			var textScope = new TextRendering.Scope
+			{
+				Text = null,
+				TextColor = Color.White,
+				FontSize = TextSize,
+				FontName = "Roboto Mono",
+				FontWeight = 400,
+				LineHeight = 1,
+				Outline = new TextRendering.Outline() { Color = Color.Black, Enabled = true, Size = 3 }
+			};
+
+			textScope.Text = $"L: {box.Size.y:0.#}";
+			textScope.TextColor = Gizmo.Colors.Left;
+			Gizmo.Draw.ScreenText( textScope, box.Mins.WithY( box.Center.y ), Vector2.Up * 32 );
+
+			textScope.Text = $"W: {box.Size.x:0.#}";
+			textScope.TextColor = Gizmo.Colors.Forward;
+			Gizmo.Draw.ScreenText( textScope, box.Mins.WithX( box.Center.x ), Vector2.Up * 32 );
 		}
 	}
 
@@ -178,8 +203,11 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 	void Cancel()
 	{
+		PopUndo();
+
 		_box = null;
 		_dragStarted = false;
+		_resizeDragging = false;
 	}
 
 	public override void OnCancel()
@@ -210,6 +238,12 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 			if ( Gizmo.Control.BoundingBox( "Resize", box, out var outBox ) )
 			{
+				if ( !_resizeDragging )
+				{
+					_resizeDragging = true;
+					_resizeBefore = _box.Value;
+				}
+
 				_deltaBox.Maxs += outBox.Maxs - box.Maxs;
 				_deltaBox.Mins += outBox.Mins - box.Mins;
 
@@ -234,21 +268,17 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 				BuildPreview();
 			}
+			else if ( _resizeDragging && !Gizmo.IsLeftMouseDown )
+			{
+				_resizeDragging = false;
 
-			Gizmo.Draw.IgnoreDepth = true;
-			Gizmo.Draw.LineThickness = 2;
-			Gizmo.Draw.Color = Gizmo.Colors.Active.WithAlpha( 0.5f );
-			Gizmo.Draw.LineBBox( box );
-			Gizmo.Draw.LineThickness = 3;
-			Gizmo.Draw.Color = Gizmo.Colors.Left;
-			Gizmo.Draw.ScreenText( $"L: {box.Size.y:0.#}", box.Maxs.WithY( box.Center.y ), Vector2.Up * 32, size: TextSize );
-			Gizmo.Draw.Line( box.Maxs.WithY( box.Mins.y ), box.Maxs.WithY( box.Maxs.y ) );
-			Gizmo.Draw.Color = Gizmo.Colors.Forward;
-			Gizmo.Draw.ScreenText( $"W: {box.Size.x:0.#}", box.Maxs.WithX( box.Center.x ), Vector2.Up * 32, size: TextSize );
-			Gizmo.Draw.Line( box.Maxs.WithX( box.Mins.x ), box.Maxs.WithX( box.Maxs.x ) );
-			Gizmo.Draw.Color = Gizmo.Colors.Up;
-			Gizmo.Draw.ScreenText( $"H: {box.Size.z:0.#}", box.Maxs.WithZ( box.Center.z ), Vector2.Up * 32, size: TextSize );
-			Gizmo.Draw.Line( box.Maxs.WithZ( box.Mins.z ), box.Maxs.WithZ( box.Maxs.z ) );
+				PushUndo( "Resize Block", _resizeBefore, _box );
+			}
+
+			using ( Gizmo.Scope( "Bounds" ) )
+			{
+				DimensionDisplay.DrawBounds( box );
+			}
 		}
 
 		if ( _previewModel.IsValid() && !_previewModel.IsError )
@@ -272,6 +302,24 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 	{
 		var mesh = Build();
 		_previewModel = mesh?.Rebuild();
+	}
+
+	void PushUndo( string name, BBox? before, BBox? after )
+	{
+		if ( before == after ) return;
+
+		PushUndo( name,
+			undo: () =>
+			{
+				_box = before;
+				BuildPreview();
+			},
+			redo: () =>
+			{
+				_box = after;
+				BuildPreview();
+			}
+		);
 	}
 
 	private static IEnumerable<TypeDescription> GetBuilderTypes()

@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Reflection;
 
 namespace Sandbox;
@@ -23,7 +23,7 @@ public static partial class Rpc
 			return;
 		}
 
-		NetworkDebugSystem.Current?.Track( $"{method.TypeDescription.FullName}.{method.Name}", message );
+		NetworkDebugSystem.Current?.Track( $"{method.TypeDescription.FullName}.{method.Name}", message, outbound: false, source );
 
 		using ( WithCaller( source ) )
 		{
@@ -50,10 +50,24 @@ public static partial class Rpc
 	}
 
 	/// <summary>
-	/// Called when a static RPC is called
+	/// Called when a static RPC is called with a single argument of an array type.
+	/// </summary>
+	[EditorBrowsable( EditorBrowsableState.Never )]
+	public static void OnCallRpc<T>( WrappedMethod m, T[] argument )
+	{
+		OnCallRpcInternal( m, [argument] );
+	}
+
+	/// <summary>
+	/// Called when a static RPC is called with object parameters.
 	/// </summary>
 	[EditorBrowsable( EditorBrowsableState.Never )]
 	public static void OnCallRpc( WrappedMethod m, params object[] argumentList )
+	{
+		OnCallRpcInternal( m, argumentList );
+	}
+
+	static void OnCallRpcInternal( WrappedMethod m, in object[] argumentList )
 	{
 		var attribute = m.GetAttribute<RpcAttribute>();
 		if ( attribute is null ) return;
@@ -65,7 +79,6 @@ public static partial class Rpc
 		{
 			SendStaticRpc( m, argumentList, attribute );
 		}
-
 		// Was filtered out
 		if ( Filter.HasValue && !Filter.Value.IsRecipient( Connection.Local ) ) return;
 
@@ -116,6 +129,7 @@ public static partial class Rpc
 				GenericArguments = Game.TypeLibrary.ToIdentities( m.GenericArguments )
 			};
 
+			NetworkDebugSystem.Current?.Track( $"{m.TypeName}.{m.MethodName}", msg, outbound: true );
 			networkSystem.Broadcast( msg, Filter, attribute.Flags );
 			return;
 		}
@@ -138,6 +152,7 @@ public static partial class Rpc
 				GenericArguments = Game.TypeLibrary.ToIdentities( m.GenericArguments )
 			};
 
+			NetworkDebugSystem.Current?.Track( $"{m.TypeName}.{m.MethodName}", msg, outbound: true );
 			networkSystem.Send( targetId, msg, attribute.Flags );
 		}
 	}

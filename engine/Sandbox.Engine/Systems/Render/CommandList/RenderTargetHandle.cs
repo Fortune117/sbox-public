@@ -13,6 +13,11 @@ public ref struct RenderTargetHandle
 	public readonly ColorTextureRef ColorTexture => new ColorTextureRef { Name = Name };
 
 	/// <summary>
+	/// Reference to the depth texture of this target
+	/// </summary>
+	public readonly DepthTextureRef DepthTexture => new DepthTextureRef { Name = Name };
+
+	/// <summary>
 	/// Reference to the index of the color texture of this target
 	/// </summary>
 	public readonly ColorIndexRef ColorIndex => new ColorIndexRef { Name = Name };
@@ -27,6 +32,11 @@ public ref struct RenderTargetHandle
 		public string Name { get; internal set; }
 	}
 
+	public ref struct DepthTextureRef
+	{
+		public string Name { get; internal set; }
+	}
+
 	public ref struct ColorIndexRef
 	{
 		public string Name { get; internal set; }
@@ -35,6 +45,8 @@ public ref struct RenderTargetHandle
 	public ref struct SizeHandle
 	{
 		public string Name { get; internal set; }
+
+		public int Divisor { get; internal set; }
 	}
 
 }

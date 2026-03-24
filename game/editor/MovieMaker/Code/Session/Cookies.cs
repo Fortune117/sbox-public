@@ -6,7 +6,7 @@ namespace Editor.MovieMaker;
 
 partial class Session
 {
-	internal string CookiePrefix => $"moviemaker.{(Player.Resource as MovieResource)?.ResourceId.ToString() ?? Player.Id.ToString()}";
+	internal string CookiePrefix => $"moviemaker.{(Player.Resource as MovieResource)?.ResourcePath.FastHash64().ToString() ?? Player.Id.ToString()}";
 
 	public T GetCookie<T>( string key, T fallback )
 	{
@@ -113,9 +113,11 @@ partial class Session
 		_frameRate = Cookies.FrameRate;
 		_frameSnap = Cookies.FrameSnap;
 		_objectSnap = Cookies.ObjectSnap;
-		_trackListScrollPosition = Cookies.ScrollPosition;
 
-		SetView( Cookies.TimeOffset, Cookies.PixelsPerSecond );
+		var timeline = Editor.TimelinePanel?.Timeline;
+
+		timeline?.SetView( Cookies.TimeOffset, Cookies.PixelsPerSecond );
+
 		SetEditMode( Cookies.EditMode );
 	}
 }

@@ -93,12 +93,19 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 	{
 		{ "public/.gitignore", ".gitignore" },
 		{ "public/.gitattributes", ".gitattributes" },
+		{ "public/.github/PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE.md" },
+		{ "public/.github/ISSUE_TEMPLATE/bug_report.yml", ".github/ISSUE_TEMPLATE/bug_report.yml" },
+		{ "public/.github/ISSUE_TEMPLATE/config.yml", ".github/ISSUE_TEMPLATE/config.yml" },
+		{ "public/.github/ISSUE_TEMPLATE/crash.yml", ".github/ISSUE_TEMPLATE/crash.yml" },
+		{ "public/.github/ISSUE_TEMPLATE/feature_request.yml", ".github/ISSUE_TEMPLATE/feature_request.yml" },
+		{ "public/.github/ISSUE_TEMPLATE/whitelist.yml", ".github/ISSUE_TEMPLATE/whitelist.yml" },
 		{ "public/.github/workflows/pull_request.yml", ".github/workflows/pull_request.yml" },
 		{ "public/.github/workflows/pull_request_checks.yml", ".github/workflows/pull_request_checks.yml" },
 		{ "public/.github/workflows/pull_request_formatting.yml", ".github/workflows/pull_request_formatting.yml" },
 		{ "public/README.md", "README.md" },
 		{ "public/LICENSE.md", "LICENSE.md" },
 		{ "public/CONTRIBUTING.md", "CONTRIBUTING.md" },
+		{ "public/SECURITY.md", "SECURITY.md" },
 		{ "public/Bootstrap.bat", "Bootstrap.bat" }
 	};
 
@@ -221,8 +228,21 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 				return false;
 			}
 
-			var uploadedTotalBytes = CalculateArtifactTotalSize( uploadedArtifacts );
-			Log.Info( $"Total artifact data uploaded: {Utility.FormatSize( uploadedTotalBytes )}" );
+			// Also upload a copy of the manifest indexed by the private commit hash.
+			// This lets CI running in the private repo resolve artifacts directly from
+			// its own git history without needing to know the public commit hash.
+			var privateCommitHash = GetPrivateCommitHash();
+			if ( !string.IsNullOrEmpty( privateCommitHash ) &&
+				!string.Equals( privateCommitHash, publicCommitHash, StringComparison.OrdinalIgnoreCase ) )
+			{
+				if ( !UploadManifest( privateCommitHash, uploadedArtifacts, remoteBase ) )
+				{
+					return false;
+				}
+			}
+
+			var manifestTotalBytes = CalculateArtifactTotalSize( uploadedArtifacts );
+			Log.Info( $"Total manifest artifact size: {Utility.FormatSize( manifestTotalBytes )}" );
 
 			return true;
 		}
@@ -472,6 +492,26 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 		return publicCommitHash;
 	}
 
+	/// <summary>
+	/// Returns the HEAD commit hash of the private (current) repository.
+	/// </summary>
+	private static string GetPrivateCommitHash()
+	{
+		string hash = null;
+		Utility.RunProcess( "git", "rev-parse HEAD", onDataReceived: ( _, e ) =>
+		{
+			if ( !string.IsNullOrWhiteSpace( e.Data ) )
+				hash ??= e.Data.Trim();
+		} );
+
+		if ( string.IsNullOrEmpty( hash ) )
+		{
+			Log.Warning( "Failed to resolve private commit hash; private-keyed manifest will not be uploaded." );
+		}
+
+		return hash;
+	}
+
 	private static HashSet<string> GetCurrentLfsFiles( string relativeRepoPath )
 	{
 		var trackedFiles = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
@@ -548,6 +588,36 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 		var duplicateManifestCount = 0;
 		var duplicateUploadCount = 0;
 
+		// Pre-compute SHA256 hashes in parallel - hashing is CPU+IO bound and benefits from concurrency
+		var hashCache = new ConcurrentDictionary<string, (string Sha256, long Size)>( StringComparer.OrdinalIgnoreCase );
+		Parallel.ForEach( candidates, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, item =>
+		{
+			var (_, absolutePath) = item;
+			if ( !File.Exists( absolutePath ) )
+				return;
+			var ext = Path.GetExtension( absolutePath );
+			if ( !string.IsNullOrEmpty( ext ) && ForbiddenArtifactExtensions.Contains( ext ) )
+				return;
+
+			var fileInfo = new FileInfo( absolutePath );
+			var resolvedPath = absolutePath;
+			if ( fileInfo.LinkTarget is not null )
+			{
+				var resolved = fileInfo.ResolveLinkTarget( returnFinalTarget: true );
+				if ( resolved?.Exists == true )
+				{
+					resolvedPath = resolved.FullName;
+					fileInfo = new FileInfo( resolvedPath );
+				}
+				else
+				{
+					return; // broken symlink - handled with a warning in the sequential pass below
+				}
+			}
+
+			hashCache[absolutePath] = (Utility.CalculateSha256( resolvedPath ), fileInfo.Length);
+		} );
+
 		foreach ( var (repoPath, absolutePath) in candidates )
 		{
 			var repoPathNormalized = ToForwardSlash( repoPath );
@@ -565,13 +635,18 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 				return false;
 			}
 
-			var fileInfo = new FileInfo( absolutePath );
-			var sha256 = Utility.CalculateSha256( absolutePath );
+			if ( !hashCache.TryGetValue( absolutePath, out var cached ) )
+			{
+				// Not in cache - must be a broken symlink (resolved in the parallel pass above)
+				Log.Warning( $"Failed to resolve symlink target for {repoPathNormalized}, skipping artifact" );
+				continue;
+			}
+
 			var artifact = new ArtifactFileInfo
 			{
 				Path = repoPathNormalized,
-				Sha256 = sha256,
-				Size = fileInfo.Length
+				Sha256 = cached.Sha256,
+				Size = cached.Size
 			};
 
 			if ( !artifacts.Add( artifact ) )
@@ -580,7 +655,7 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 				continue;
 			}
 
-			if ( !uploadedHashes.Add( sha256 ) )
+			if ( !uploadedHashes.Add( cached.Sha256 ) )
 			{
 				duplicateUploadCount++;
 				continue;
@@ -595,16 +670,6 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 			return true;
 		}
 
-		if ( duplicateManifestCount > 0 )
-		{
-			Log.Info( $"Skipped {duplicateManifestCount} duplicate manifest entries for {artifactLabel} artifacts" );
-		}
-
-		if ( duplicateUploadCount > 0 )
-		{
-			Log.Info( $"Skipped {duplicateUploadCount} duplicate upload candidates for {artifactLabel} artifacts" );
-		}
-
 		long batchBytes = 0;
 		foreach ( var upload in uniqueUploads )
 		{
@@ -613,41 +678,58 @@ internal class SyncPublicRepo( string name, bool dryRun = false ) : Step( name )
 
 		if ( skipUpload )
 		{
-			Log.Info( $"Dry run skipping upload for {uniqueUploads.Count} unique {artifactLabel} artifacts ({Utility.FormatSize( batchBytes )})" );
+			Log.Info( $"Dry run: {uniqueUploads.Count} unique {artifactLabel} artifacts ({Utility.FormatSize( batchBytes )})" );
 			return true;
 		}
 
-		var maxParallelUploads = Math.Max( 1, Math.Min( MAX_PARALLEL_UPLOADS, Environment.ProcessorCount ) );
-		Log.Info( $"Uploading {uniqueUploads.Count} unique {artifactLabel} artifacts (up to {maxParallelUploads} concurrent uploads)..." );
+		Log.Info( $"Uploading {uniqueUploads.Count} {artifactLabel} artifacts ({Utility.FormatSize( batchBytes )})..." );
 
-		var failedUploads = new ConcurrentBag<string>();
-		Parallel.ForEach( uniqueUploads, new ParallelOptions { MaxDegreeOfParallelism = maxParallelUploads }, item =>
+		if ( !BatchUploadArtifacts( uniqueUploads, remoteBase, artifactLabel ) )
 		{
-			var (absolutePath, artifact) = item;
-			if ( !UploadArtifactFile( absolutePath, artifact, remoteBase ) )
-			{
-				Log.Error( $"Failed to upload {artifactLabel} artifact: {artifact.Path}" );
-				failedUploads.Add( artifact.Path );
-			}
-		} );
-
-		if ( !failedUploads.IsEmpty )
-		{
-			Log.Error( $"Failed to upload {failedUploads.Count} {artifactLabel} artifact(s)" );
 			return false;
 		}
 
-		Log.Info( $"Uploaded {uniqueUploads.Count} unique {artifactLabel} artifacts ({Utility.FormatSize( batchBytes )})" );
+		Log.Info( $"Uploaded {uniqueUploads.Count} {artifactLabel} artifacts ({Utility.FormatSize( batchBytes )})" );
 
 		return true;
 	}
 
-	private static bool UploadArtifactFile( string localPath, ArtifactFileInfo artifact, string remoteBase )
+	private static bool BatchUploadArtifacts( IReadOnlyCollection<(string AbsolutePath, ArtifactFileInfo Artifact)> uploads, string remoteBase, string artifactLabel )
 	{
-		var remotePath = $"{remoteBase}/artifacts/{artifact.Sha256}";
-		var sizeLabel = $" ({Utility.FormatSize( artifact.Size )})";
-		Log.Info( $"Uploading {artifact.Sha256}{sizeLabel}..." );
-		return Utility.RunProcess( "rclone", $"copyto \"{localPath}\" \"{remotePath}\" --ignore-existing -q", timeoutMs: 600000 );
+		var stagingDir = Path.Combine( Path.GetTempPath(), $"sbox-upload-{Guid.NewGuid():N}" );
+		Directory.CreateDirectory( stagingDir );
+
+		Log.Info( $"Staging {uploads.Count} {artifactLabel} artifact(s) for batch upload..." );
+
+		try
+		{
+			foreach ( var (absolutePath, artifact) in uploads )
+			{
+				var destPath = Path.Combine( stagingDir, artifact.Sha256 );
+				File.Copy( absolutePath, destPath, overwrite: true );
+			}
+
+			var remoteArtifactsPath = $"{remoteBase}/artifacts";
+			var args = $"copy \"{stagingDir}\" \"{remoteArtifactsPath}\" --ignore-existing --transfers {MAX_PARALLEL_UPLOADS} --checkers {MAX_PARALLEL_UPLOADS} -q";
+			if ( !Utility.RunProcess( "rclone", args, timeoutMs: 3600000 ) )
+			{
+				Log.Error( $"Failed to batch upload {artifactLabel} artifacts" );
+				return false;
+			}
+
+			return true;
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete( stagingDir, true );
+			}
+			catch ( Exception ex )
+			{
+				Log.Warning( $"Failed to clean up upload staging directory: {ex.Message}" );
+			}
+		}
 	}
 
 	private static bool UploadManifest( string commitHash, IEnumerable<ArtifactFileInfo> artifacts, string remoteBase )

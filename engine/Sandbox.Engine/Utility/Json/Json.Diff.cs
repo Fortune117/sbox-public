@@ -1,7 +1,6 @@
 ﻿using System.Data;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using static Sandbox.Json;
 
 namespace Sandbox;
 
@@ -10,7 +9,7 @@ public static partial class Json
 	/// <summary>
 	/// Uniquely identifies a tracked object by its type and identifier value.
 	/// </summary>
-	internal record struct ObjectIdentifier
+	public record struct ObjectIdentifier
 	{
 		[JsonInclude]
 		public string Type;
@@ -22,7 +21,7 @@ public static partial class Json
 	/// <summary>
 	/// Represents a property change to apply during patching.
 	/// </summary>
-	internal record struct PropertyOverride
+	public record struct PropertyOverride
 	{
 		/// <summary>The object whose property should be modified</summary>
 		[JsonInclude]
@@ -40,7 +39,7 @@ public static partial class Json
 	/// <summary>
 	/// Represents an object that needs to be added during patching.
 	/// </summary>
-	internal record struct AddedObject
+	public record struct AddedObject
 	{
 		/// <summary>The identifier for the new object</summary>
 		[JsonInclude]
@@ -70,7 +69,7 @@ public static partial class Json
 	/// <summary>
 	/// Represents an object that should be removed during patching.
 	/// </summary>
-	internal record struct RemovedObject
+	public record struct RemovedObject
 	{
 		/// <summary>The identifier of the object to remove</summary>
 		[JsonInclude]
@@ -80,7 +79,7 @@ public static partial class Json
 	/// <summary>
 	/// Represents an object that should be moved to a new location during patching.
 	/// </summary>
-	internal record struct MovedObject
+	public record struct MovedObject
 	{
 		/// <summary>The identifier of the object to move</summary>
 		[JsonInclude]
@@ -107,7 +106,7 @@ public static partial class Json
 	/// Defines characteristics of an object type that should be tracked within a JSON tree structure.
 	/// These definitions are used to identify, track, and manage specific types of objects during JSON diffing and patching operations.
 	/// </summary>
-	internal class TrackedObjectDefinition
+	public class TrackedObjectDefinition
 	{
 		/// <summary>
 		/// A unique identifier for this object type. This is used to categorize objects.
@@ -249,6 +248,9 @@ public static partial class Json
 
 		/// <summary>Child objects belonging to this object</summary>
 		public LinkedList<TrackedObject> Children = new();
+
+		/// <summary>Reference to this object's node in parent's Children list (for O(1) removal)</summary>
+		public LinkedListNode<TrackedObject> ChildNode;
 
 		/// <summary>
 		/// Reconstructs a complete JSON tree from this object and all its children.
@@ -402,7 +404,7 @@ public static partial class Json
 
 			if ( currentIdentifier.HasValue )
 			{
-				result.IdToTrackedObject[currentIdentifier.Value] = new TrackedObject
+				var trackedObj = new TrackedObject
 				{
 					Id = currentIdentifier.Value,
 					Definition = matchedDefintion,
@@ -412,7 +414,11 @@ public static partial class Json
 					IsContainedInArray = containerIsArray,
 					Path = path,
 				};
-				parent?.Children.AddLast( result.IdToTrackedObject[currentIdentifier.Value] );
+				result.IdToTrackedObject[currentIdentifier.Value] = trackedObj;
+				if ( parent != null )
+				{
+					trackedObj.ChildNode = parent.Children.AddLast( trackedObj );
+				}
 
 				// If parent is null set our root
 				if ( parent == null )
@@ -488,7 +494,7 @@ public static partial class Json
 	/// A patch contains all the operations needed to transform one JSON structure into another
 	/// while preserving object identity and relationships.
 	/// </remarks>
-	internal class Patch
+	public class Patch
 	{
 		/// <summary>
 		/// Objects that need to be added to the target structure.
@@ -522,7 +528,7 @@ public static partial class Json
 	/// <param name="newRoot">The updated JSON object tree</param>
 	/// <param name="definitions">Set of definitions for tracked object types in the JSON structure</param>
 	/// <returns>A Patch object containing all changes needed to transform oldRoot into newRoot</returns>
-	internal static Patch CalculateDifferences(
+	public static Patch CalculateDifferences(
 		JsonObject oldRoot,
 		JsonObject newRoot,
 		HashSet<TrackedObjectDefinition> definitions )
@@ -735,7 +741,7 @@ public static partial class Json
 	/// Operations are processed in this order: removals, additions, moves,
 	/// reordering, and finally property overrides.
 	/// </remarks>
-	internal static JsonObject ApplyPatch(
+	public static JsonObject ApplyPatch(
 		JsonObject sourceRoot,
 		Patch patch,
 		HashSet<TrackedObjectDefinition> definitions )
@@ -750,9 +756,10 @@ public static partial class Json
 			if ( removedObject == null ) continue;
 
 			// check if parent still exists
-			if ( removedObject.Parent != null )
+			if ( removedObject.Parent != null && removedObject.ChildNode != null )
 			{
-				removedObject.Parent.Children.Remove( removedObject );
+				removedObject.Parent.Children.Remove( removedObject.ChildNode );
+				removedObject.ChildNode = null;
 			}
 			sourceTrackedObjects.IdToTrackedObject.Remove( removedObject.Id );
 		}
@@ -784,7 +791,7 @@ public static partial class Json
 			// Add to parent if it still exists
 			if ( addedObject.Parent != null )
 			{
-				addedObject.Parent.Children.AddLast( addedObject );
+				addedObject.ChildNode = addedObject.Parent.Children.AddLast( addedObject );
 			}
 		}
 
@@ -802,30 +809,30 @@ public static partial class Json
 
 			if ( newParentObject != null )
 			{
-				// We can perform the move
-				movedObject.Parent.Children.Remove( movedObject );
+				// We can perform the move - use ChildNode for O(1) removal
+				if ( movedObject.ChildNode != null )
+				{
+					movedObject.Parent.Children.Remove( movedObject.ChildNode );
+				}
 				movedObject.Parent = newParentObject;
 				movedObject.ContainerProperty = move.NewContainerProperty;
 				movedObject.IsContainedInArray = move.IsNewContainerArray;
 				movedObject.PreviousElement = move.NewPreviousElement.HasValue ? sourceTrackedObjects.IdToTrackedObject.GetValueOrDefault( move.NewPreviousElement.Value ) : null;
-				movedObject.Parent.Children.AddLast( movedObject );
+				movedObject.ChildNode = movedObject.Parent.Children.AddLast( movedObject );
 			}
 			else
 			{
 				// Target parent doesn't exist, remove the object entirely
-				movedObject.Parent.Children.Remove( movedObject );
+				if ( movedObject.ChildNode != null )
+				{
+					movedObject.Parent.Children.Remove( movedObject.ChildNode );
+					movedObject.ChildNode = null;
+				}
 				sourceTrackedObjects.IdToTrackedObject.Remove( movedObject.Id );
 			}
 		}
 
-		// Try ordering obejcts that have been corerctly added (valid parent)
-		var objectsRequiringReordering = patch.AddedObjects
-			.Select( a => sourceTrackedObjects.IdToTrackedObject[a.Id] )
-			// It is possible that moved items dont exist at all
-			.Concat( patch.MovedObjects.Select( m => sourceTrackedObjects.IdToTrackedObject.GetValueOrDefault( m.Id ) ) )
-			.Where( o => o != null && o.Parent != null );
-
-		ReorderAddedObjects( objectsRequiringReordering, sourceTrackedObjects );
+		ReorderAddedObjects( patch, sourceTrackedObjects );
 
 		// Last apply property overrides
 		foreach ( var propertyOverride in patch.PropertyOverrides )
@@ -839,35 +846,53 @@ public static partial class Json
 		return sourceTrackedObjects.Root.ToJson().AsObject();
 	}
 
-	private static void ReorderAddedObjects( IEnumerable<TrackedObject> addedObjects, TrackedObjects sourceObjects )
+	private static void ReorderAddedObjects( Patch patch, TrackedObjects sourceObjects )
 	{
-		// Smart people would probably do this in O(n log n)
-		// We just bruteforce it by adjusting the previous elemetns n times (leading to O(n^2)), so that order within addedObjects doesn't matter.
-		// Doing ti like this has the benefit of clear code, and performance imapct is negible anyway.
-		foreach ( var _ in addedObjects )
+		// Get objects that need reordering (added + moved, with valid parents)
+		// Materialize to avoid re-evaluating LINQ on each iteration
+		var addedObjects = patch.AddedObjects
+			.Select( a => sourceObjects.IdToTrackedObject[a.Id] )
+			.Concat( patch.MovedObjects.Select( m => sourceObjects.IdToTrackedObject.GetValueOrDefault( m.Id ) ) )
+			.Where( o => o?.Parent != null )
+			.ToList();
+
+		// Keep reordering until stable - objects may depend on each other's positions
+		// Limit iterations to prevent infinite loops from unresolvable conflicts
+		int maxIterations = addedObjects.Count + 1;
+		for ( var iteration = 0; iteration < maxIterations; iteration++ )
 		{
-			foreach ( var addedObj in addedObjects )
+			var changed = false;
+
+			foreach ( var obj in addedObjects )
 			{
-				var parent = addedObj.Parent;
+				var parent = obj.Parent;
+				if ( parent == null )
+					continue;
 
-				if ( parent == null ) continue;
+				var prevNode = obj.PreviousElement?.ChildNode;
 
-				if ( addedObj.PreviousElement != null )
-				{
-					var prevNode = parent.Children.Find( addedObj.PreviousElement );
-					if ( prevNode != null )
-					{
-						parent.Children.Remove( addedObj );
-						parent.Children.AddAfter( prevNode, addedObj );
-					}
-				}
+				// Already in correct position?
+				if ( prevNode != null && obj.ChildNode?.Previous == prevNode )
+					continue;
+
+				if ( prevNode == null && obj.ChildNode == parent.Children.First )
+					continue;
+
+				// Remove from current position
+				if ( obj.ChildNode != null )
+					parent.Children.Remove( obj.ChildNode );
+
+				// Insert at correct position
+				if ( prevNode != null )
+					obj.ChildNode = parent.Children.AddAfter( prevNode, obj );
 				else
-				{
-					parent.Children.Remove( addedObj );
-					// Best guess is to add it to the front
-					parent.Children.AddFirst( addedObj );
-				}
+					obj.ChildNode = parent.Children.AddFirst( obj );
+
+				changed = true;
 			}
+
+			if ( !changed )
+				break;
 		}
 	}
 

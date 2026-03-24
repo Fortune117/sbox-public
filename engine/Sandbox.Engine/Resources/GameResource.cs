@@ -134,9 +134,9 @@ public abstract partial class GameResource : Resource, ISourceLineProvider
 	internal static GameResource GetPromise( System.Type type, string filename )
 	{
 		var path = FixPath( filename );
-		var hash = path.FastHash();
+		if ( string.IsNullOrEmpty( path ) ) return default;
 
-		var obj = Game.Resources.Get( type, hash ) as GameResource;
+		var obj = Game.Resources.Get( type, path ) as GameResource;
 		if ( obj != null ) return obj;
 
 		obj = System.Activator.CreateInstance( type ) as GameResource;
@@ -157,7 +157,11 @@ public abstract partial class GameResource : Resource, ISourceLineProvider
 	{
 		ResourcePath = FixPath( filename );
 		ResourceName = System.IO.Path.GetFileNameWithoutExtension( ResourcePath );
+		// Keep this for backwards compat for now
+#pragma warning disable CS0618 // Type or member is obsolete
 		ResourceId = ResourcePath.FastHash();
+#pragma warning restore CS0618 // Type or member is obsolete
+		ResourceIdLong = ResourcePath.FastHash64();
 
 		Manifest = AsyncResourceLoader.Load( ResourcePath );
 
@@ -173,7 +177,11 @@ public abstract partial class GameResource : Resource, ISourceLineProvider
 
 		ResourcePath = FixPath( filename );
 		ResourceName = System.IO.Path.GetFileNameWithoutExtension( ResourcePath );
+		// Keep this for backwards compat for now
+#pragma warning disable CS0618 // Type or member is obsolete
 		ResourceId = ResourcePath.FastHash();
+#pragma warning restore CS0618 // Type or member is obsolete
+		ResourceIdLong = ResourcePath.FastHash64();
 
 		Game.Resources.Register( this );
 	}
@@ -243,8 +251,11 @@ public abstract partial class GameResource : Resource, ISourceLineProvider
 			jsobj = Json.SerializeAsObject( this );
 			OnJsonSerialize( jsobj );
 
-			// Store captured binary data
-			BinaryData = blobs.ToByteArray();
+			var capturedData = blobs.ToByteArray();
+			if ( capturedData != null || BinaryData == null )
+			{
+				BinaryData = capturedData;
+			}
 		}
 
 		jsobj["__version"] = ResourceVersion;
@@ -299,14 +310,11 @@ public abstract partial class GameResource : Resource, ISourceLineProvider
 		jso.Remove( "__version" );
 
 		// Load binary data for deserialization
-		using var blobs = BinaryData != null
-			? BlobDataSerializer.LoadFromMemory( BinaryData )
-			: BlobDataSerializer.LoadFrom( ResourcePath );
+		using var blobs = BlobDataSerializer.Load( BinaryData, ResourcePath );
 
 		Deserialize( jso );
 
-		BinaryData = null; // Clean up cached binary data
-
+		BinaryData = null;
 		_awaitingLoad = false;
 	}
 

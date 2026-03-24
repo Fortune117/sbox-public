@@ -293,6 +293,20 @@ public class Prop : Component, Component.ExecuteInEditor, Component.IDamageable
 				}
 			}
 
+			// Evaluate parameters from model data
+			if ( Model.Data is not null )
+			{
+				if ( Model.Data.ImpactDamage > -1 )
+				{
+					rb.ImpactDamage = Model.Data.ImpactDamage;
+				}
+
+				if ( Model.Data.MinImpactDamageSpeed > -1 )
+				{
+					rb.MinImpactDamageSpeed = Model.Data.MinImpactDamageSpeed;
+				}
+			}
+
 			AddProcedural( rb );
 
 			return;
@@ -510,6 +524,9 @@ public class Prop : Component, Component.ExecuteInEditor, Component.IDamageable
 		var mr = Components.Get<ModelRenderer>();
 
 		gibs.EnsureCapacity( breaklist.Length );
+
+		// Batch anything we're spawning here
+		using var _ = Scene.BatchGroup();
 
 		foreach ( var breakModel in breaklist )
 		{

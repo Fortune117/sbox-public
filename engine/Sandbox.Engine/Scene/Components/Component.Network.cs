@@ -22,11 +22,26 @@ public abstract partial class Component
 	{
 		try
 		{
-			// If we aren't valid then just set the property value anyway.
+			// If we aren't valid, then just set the property value anyway.
 			if ( !IsValid )
 			{
 				p.Setter?.Invoke( p.Value );
 				return;
+			}
+
+			// If it's the same value, just call the original setter because
+			// we don't want to do all the logic below for the same value.
+			// Obviously, if we're reading changes from the network, then we
+			// should just allow all the logic to go through.
+			if ( !NetworkTable.IsReadingChanges )
+			{
+				var currentValue = p.Getter();
+
+				if ( EqualityComparer<T>.Default.Equals( currentValue, p.Value ) )
+				{
+					p.Setter?.Invoke( p.Value );
+					return;
+				}
 			}
 
 			var root = GameObject.FindNetworkRoot();
@@ -90,9 +105,16 @@ public abstract partial class Component
 			return p.Value;
 
 		if ( InterpolatedVars.TryGetValue( p.PropertyName, out var i ) )
-			return (T)i.Query( Time.Now );
+			return (T)i.Query( Time.NowDouble );
 
 		return p.Value;
+	}
+
+	[EditorBrowsable( EditorBrowsableState.Never )]
+	[MethodImpl( MethodImplOptions.AggressiveInlining )]
+	protected void __rpc_Wrapper<T>( in WrappedMethod m, T[] argument )
+	{
+		Rpc.OnCallInstanceRpc( GameObject, this, m, [argument] );
 	}
 
 	[EditorBrowsable( EditorBrowsableState.Never )]

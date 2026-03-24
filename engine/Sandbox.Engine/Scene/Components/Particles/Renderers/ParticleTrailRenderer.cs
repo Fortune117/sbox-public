@@ -146,6 +146,7 @@ class ParticleTrail : Particle.BaseListener
 	public override void OnEnabled( Particle p )
 	{
 		so = new SceneTrailObject( Renderer.Scene.SceneWorld );
+		so.Tags.SetFrom( Renderer.GameObject.Tags );
 		so.MaxPoints = Renderer.MaxPoints;
 		so.PointDistance = Renderer.PointDistance;
 		so.LifeTime = Renderer.LifeTime;
@@ -160,6 +161,7 @@ class ParticleTrail : Particle.BaseListener
 		so.Opaque = Renderer.Opaque;
 		so.BlendMode = Renderer.BlendMode;
 		so.Wireframe = Renderer.Wireframe;
+		so.SamplerState = new() { Filter = Renderer.Texturing.FilterMode, AddressModeU = Renderer.Texturing.TextureAddressMode, AddressModeV = Renderer.Texturing.TextureAddressMode };
 	}
 
 	public override void OnDisabled( Particle p )

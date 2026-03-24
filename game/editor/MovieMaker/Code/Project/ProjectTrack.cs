@@ -148,14 +148,14 @@ public partial interface IProjectReferenceTrack : IProjectTrack, IReferenceTrack
 
 	new ProjectReferenceTrack<GameObject>? Parent { get; }
 	new Guid Id { get; }
-	new Guid? ReferenceId { get; set; }
+	new TrackMetadata? Metadata { get; set; }
 
 	IReferenceTrack<GameObject>? IReferenceTrack.Parent => Parent;
 	IProjectTrack? IProjectTrack.Parent => Parent;
 
 	Guid IReferenceTrack.Id => Id;
+	TrackMetadata? IReferenceTrack.Metadata => Metadata;
 	Guid IProjectTrack.Id => Id;
-	Guid? IReferenceTrack.ReferenceId => ReferenceId;
 }
 
 public partial class ProjectReferenceTrack<T>( MovieProject project, Guid id, string name )
@@ -166,10 +166,10 @@ public partial class ProjectReferenceTrack<T>( MovieProject project, Guid id, st
 
 	public new ProjectReferenceTrack<GameObject>? Parent => (ProjectReferenceTrack<GameObject>?)base.Parent;
 
-	public Guid? ReferenceId { get; set; }
+	public TrackMetadata? Metadata { get; set; }
 
 	public override ICompiledTrack Compile( ICompiledTrack? compiledParent, bool headerOnly ) =>
-		new CompiledReferenceTrack<T>( Id, Name, (CompiledReferenceTrack<GameObject>)compiledParent!, ReferenceId );
+		new CompiledReferenceTrack<T>( Id, Name, (CompiledReferenceTrack<GameObject>)compiledParent!, Metadata );
 
 	ITrack? ITrack.Parent => Parent;
 }
@@ -229,7 +229,7 @@ public partial interface IProjectPropertyTrack : IPropertyTrack, IProjectBlockTr
 
 	bool AddRange( IEnumerable<IProjectPropertyBlock> blocks );
 
-	void SetBlocks( IReadOnlyList<IProjectPropertyBlock> blocks );
+	void SetBlocks( IEnumerable<IProjectPropertyBlock> blocks );
 
 	/// <summary>
 	/// Copies blocks that overlap the given <paramref name="timeRange"/> and returns
@@ -237,8 +237,6 @@ public partial interface IProjectPropertyTrack : IPropertyTrack, IProjectBlockTr
 	/// </summary>
 	IReadOnlyList<IProjectPropertyBlock> Slice( MovieTimeRange timeRange );
 
-	IReadOnlyList<IProjectPropertyBlock> CreateSourceBlocks( ProjectSourceClip source );
-	
 	IReadOnlyList<ITrackBlock> IProjectBlockTrack.Blocks => Blocks;
 	IProjectTrack? IProjectTrack.Parent => Parent;
 	ITrack? ITrack.Parent => Parent;
@@ -248,11 +246,17 @@ public sealed partial class ProjectPropertyTrack<T>( MovieProject project, Guid 
 	: ProjectTrack<T>( project, id, name ), IProjectPropertyTrack, IPropertyTrack<T>
 {
 	private readonly List<PropertyBlock<T>> _blocks = new();
+	private MovieTime _duration;
 	private bool _blocksChanged;
 
-	public MovieTimeRange TimeRange => (0d, Blocks.Select( x => x.TimeRange.End )
-		.DefaultIfEmpty()
-		.Max());
+	public MovieTimeRange TimeRange
+	{
+		get
+		{
+			UpdateBlocks();
+			return (default, _duration);
+		}
+	}
 
 	public IReadOnlyList<PropertyBlock<T>> Blocks
 	{
@@ -416,7 +420,7 @@ public sealed partial class ProjectPropertyTrack<T>( MovieProject project, Guid 
 	bool IProjectPropertyTrack.AddRange( IEnumerable<IProjectPropertyBlock> blocks ) =>
 		AddRange( blocks.Cast<PropertyBlock<T>>() );
 
-	public void SetBlocks( IReadOnlyList<IProjectPropertyBlock> blocks )
+	public void SetBlocks( IEnumerable<IProjectPropertyBlock> blocks )
 	{
 		_blocksChanged = true;
 		_blocks.Clear();
@@ -435,20 +439,31 @@ public sealed partial class ProjectPropertyTrack<T>( MovieProject project, Guid 
 
 	IReadOnlyList<IProjectPropertyBlock> IProjectPropertyTrack.Slice( MovieTimeRange timeRange ) => Slice( timeRange );
 
-	IReadOnlyList<IProjectPropertyBlock> IProjectPropertyTrack.CreateSourceBlocks( ProjectSourceClip source ) =>
-		source.AsBlocks<T>( this );
-
 	private void UpdateBlocks()
 	{
 		if ( !_blocksChanged ) return;
 
 		_blocksChanged = false;
 
-		// Sort by time
+		SortBlocks();
+		MergeBlocks();
+		UpdateDuration();
+	}
 
+	/// <summary>
+	/// Sort blocks by time.
+	/// </summary>
+	private void SortBlocks()
+	{
 		_blocks.Sort( ( a, b ) => a.TimeRange.Start.CompareTo( b.TimeRange.Start ) );
+	}
 
-		// Merge touching blocks that have identical values at their interface
+	/// <summary>
+	/// Merge touching blocks that have identical values at their interface.
+	/// </summary>
+	private void MergeBlocks()
+	{
+		if ( !CanMergeBlocks ) return;
 
 		var comparer = EqualityComparer<T>.Default;
 
@@ -473,5 +488,20 @@ public sealed partial class ProjectPropertyTrack<T>( MovieProject project, Guid 
 			_blocks[i] = new PropertyBlock<T>( combinedSignal, combinedTimeRange );
 			_blocks.RemoveAt( i + 1 );
 		}
+	}
+
+	// TODO: This reeks, we can't deserialize Resource off the main thread
+	private static bool CanMergeBlocks =>
+		ThreadSafe.IsMainThread || !typeof( T ).IsAssignableTo( typeof( Resource ) );
+
+	private void UpdateDuration()
+	{
+		var duration = _blocks.Count == 0 ? default : _blocks[^1].TimeRange.End;
+
+		if ( _duration == duration ) return;
+
+		_duration = duration;
+
+		Project.InvalidateDuration();
 	}
 }

@@ -115,6 +115,9 @@ public partial class GameObject
 
 	private static readonly DeserializeOptions _defaultDeserializeOptions = new();
 
+	// Stashed by Deserialize(), consumed by InvokeCallback(Deserialize) to avoid a closure allocation.
+	private DeserializeOptions _pendingDeserializeOptions;
+
 	/// <summary>
 	/// Returns either a full JsonObject with all the GameObjects data,
 	/// or if this GameObject is a prefab instance, it will return an object containing the patch/diff between instance and prefab.
@@ -148,7 +151,6 @@ public partial class GameObject
 		if ( GameObjectVersion != 0 ) json[JsonKeys.Version] = GameObjectVersion;
 		json[JsonKeys.PrefabInstanceSource] = JsonValue.Create( PrefabInstance.PrefabSource );
 		json[JsonKeys.PrefabInstancePatch] = Json.ToNode( PrefabInstance.Patch );
-		PrefabInstance.ValidatePrefabLookup();
 		json[JsonKeys.PrefabIdToInstanceId] = Json.ToNode( PrefabInstance.PrefabToInstanceLookup );
 
 		return json;
@@ -313,7 +315,11 @@ public partial class GameObject
 				}
 
 				// Need to create those since they are not stored
-				PrefabInstance.InitMappingsForNestedInstance( node[JsonKeys.Id].Deserialize<Guid>() );
+				if ( !PrefabInstance.InitMappingsForNestedInstance( node[JsonKeys.Id].Deserialize<Guid>() ) )
+				{
+					PostDeserialize( options );
+					return;
+				}
 			}
 		}
 		// Handle full prefab instances
@@ -442,7 +448,7 @@ public partial class GameObject
 				//
 				if ( componentType is null || componentType.TargetType.IsAbstract )
 				{
-					Log.Warning( $"TypeLibrary couldn't find Component type {componentTypeName}" );
+					Log.Warning( $"Missing Component: couldn't find Component type {componentTypeName} on {this}" );
 
 					var missing = new MissingComponent( componentJson );
 					Components.AddMissing( missing );
@@ -570,7 +576,8 @@ public partial class GameObject
 
 		if ( Parent is null || (Parent.Flags & GameObjectFlags.Deserializing) == 0 )
 		{
-			CallbackBatch.Add( CommonCallback.Deserialize, () => PostDeserialize( options ), this, "PostDeserialize" );
+			_pendingDeserializeOptions = options;
+			CallbackBatch.Add( CommonCallback.Deserialize, this, "PostDeserialize" );
 		}
 
 		// Trigger OnEnabled after the GameObject has been deserialized fully, _enabled was set before, so OnAwake calls properly
@@ -618,7 +625,7 @@ public partial class GameObject
 
 		if ( prefabFile == null || prefabFile.IsPromise )
 		{
-			Log.Warning( $"Unable to load prefab '{PrefabInstance.PrefabSource}'" );
+			Log.Warning( $"Unable to load prefab '{PrefabInstance.PrefabSource}'. Prefab is not loaded or does not exist." );
 			return false;
 		}
 
@@ -857,8 +864,8 @@ public partial class GameObject
 				var id = bs.Read<Guid>();
 				return Game.ActiveScene.Directory.FindByGuid( id );
 			case NetworkReferenceType.Prefab:
-				var resourceId = bs.Read<int>();
-				var prefabFile = ResourceLibrary.Get<PrefabFile>( resourceId );
+				var resourceId = bs.Read<ulong>();
+				var prefabFile = Game.Resources.GetByIdLong<PrefabFile>( resourceId );
 				return SceneUtility.GetPrefabScene( prefabFile );
 			default:
 				return default;
@@ -876,7 +883,7 @@ public partial class GameObject
 		if ( go is PrefabScene prefabScene )
 		{
 			bs.Write( (byte)NetworkReferenceType.Prefab );
-			bs.Write( prefabScene.Source.ResourceId );
+			bs.Write( prefabScene.Source.ResourceIdLong );
 			return;
 		}
 

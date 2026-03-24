@@ -332,6 +332,15 @@ public static partial class MathX
 	}
 
 	/// <summary>
+	/// Remap a double value from one range to another. Clamps value between newLow and newHigh.
+	/// </summary>
+	[MethodImpl( MethodImplOptions.AggressiveInlining )]
+	public static double Remap( this double value, double oldLow, double oldHigh, double newLow = 0, double newHigh = 1 )
+	{
+		return Remap( value, oldLow, oldHigh, newLow, newHigh, true );
+	}
+
+	/// <summary>
 	/// Remap a float value from a one range to another
 	/// </summary>
 	[MethodImpl( MethodImplOptions.AggressiveInlining )]
@@ -390,6 +399,22 @@ public static partial class MathX
 			return 0.01f;
 
 		return radius / MathF.Abs( MathF.Sin( fieldOfView.DegreeToRadian() * 0.5f ) );
+	}
+
+	/// <summary>
+	/// Smoothly approach the target value using exponential decay.
+	/// Cheaper than SmoothDamp but doesn't track velocity for momentum.
+	/// Good for non-physical smoothing.
+	/// </summary>
+	/// <param name="current">Current value</param>
+	/// <param name="target">Target value to approach</param>
+	/// <param name="halflife">Time for the difference to reduce by 50%</param>
+	/// <param name="deltaTime">Time step</param>
+	[MethodImpl( MethodImplOptions.AggressiveInlining )]
+	public static float ExponentialDecay( float current, float target, float halflife, float deltaTime )
+	{
+		// log(0.5) == -0.69314718f
+		return target + (current - target) * MathF.Exp( -0.69314718f / halflife * deltaTime );
 	}
 
 	/// <summary>

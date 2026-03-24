@@ -38,9 +38,11 @@ public sealed partial class MovieProject : IMovieClip, IMovieProject
 
 	public bool IsEmpty => Tracks.Count == 0;
 
-	public MovieTime Duration => _trackList.OfType<IProjectBlockTrack>()
+	private MovieTime? _duration;
+
+	public MovieTime Duration => _duration ??= _trackList.OfType<IProjectBlockTrack>()
 		.Select( x => x.TimeRange.End )
-		.DefaultIfEmpty( 0d )
+		.DefaultIfEmpty()
 		.Max();
 
 	public IReadOnlyList<IProjectTrack> Tracks
@@ -114,8 +116,6 @@ public sealed partial class MovieProject : IMovieClip, IMovieProject
 	/// </summary>
 	internal MovieProject( MovieClip clip )
 	{
-		var source = new ProjectSourceClip( Guid.NewGuid(), clip, null );
-
 		foreach ( var compiledTrack in clip.Tracks )
 		{
 			var parentTrack = compiledTrack.Parent is { } parent ? GetTrack( parent ) : null;
@@ -126,6 +126,8 @@ public sealed partial class MovieProject : IMovieClip, IMovieProject
 				{
 					var track = IProjectReferenceTrack.Create( this, refTrack.Id, refTrack.Name, refTrack.TargetType );
 
+					track.Metadata = refTrack.Metadata;
+
 					AddTrackInternal( track, parentTrack );
 					continue;
 				}
@@ -133,7 +135,7 @@ public sealed partial class MovieProject : IMovieClip, IMovieProject
 				{
 					var track = IProjectPropertyTrack.Create( this, Guid.NewGuid(), propertyTrack.Name, propertyTrack.TargetType );
 
-					track.SetBlocks( track.CreateSourceBlocks( source ) );
+					track.SetBlocks( propertyTrack.Blocks.ToProjectBlocks() );
 
 					AddTrackInternal( track, parentTrack );
 					continue;
@@ -258,9 +260,10 @@ public sealed partial class MovieProject : IMovieClip, IMovieProject
 
 			case IReferenceTrack referenceTrack:
 			{
-				if ( GetTrack( referenceTrack.Id ) is { } refTrackCopy ) return refTrackCopy;
+				if ( GetTrack( referenceTrack.Id ) is IProjectReferenceTrack refTrackCopy ) return refTrackCopy;
 
 				refTrackCopy = IProjectReferenceTrack.Create( this, referenceTrack.Id, referenceTrack.Name, referenceTrack.TargetType );
+				refTrackCopy.Metadata = referenceTrack.Metadata;
 
 				var parentCopy = track.Parent is { } parent ? GetOrAddTrack( parent ) : null;
 
@@ -347,6 +350,11 @@ public sealed partial class MovieProject : IMovieClip, IMovieProject
 	internal void InvalidateTracks()
 	{
 		_tracksChanged = true;
+	}
+
+	internal void InvalidateDuration()
+	{
+		_duration = null;
 	}
 
 	/// <summary>
